@@ -55,12 +55,21 @@ token to their own tools or Claude to manage goals programmatically.
 
 ## Mobile
 
-The site is an installable PWA: manifest, icons, and a network-first service
-worker (offline-capable shell, API traffic never cached). On iPhone: open in
-Safari -> Share -> Add to Home Screen. On Android: Chrome offers Install.
+Two tiers, same backend:
+
+- **PWA**: the site installs from the browser (iPhone: Safari -> Share -> Add
+  to Home Screen; Android: Chrome offers Install). Manifest, icons, and a
+  network-first service worker; API traffic is never cached.
+- **Native app**: `mobile/` is a React Native app on Expo SDK 57. Same design
+  system (Cormorant Garamond + IBM Plex Mono, bone/ink, automatic dark mode),
+  same features: email-code sign-in (no passwords, no deep links), the
+  editable ledger, the five-step wizard, the realtime feed with unread badge,
+  friends, groups, public profiles, and account settings including the API
+  token. Run it with `cd mobile && npx expo start` and scan the QR with Expo
+  Go; ship it with EAS Build when App Store distribution is wanted.
 
 ## Roadmap
 
-- Web push notifications for feed events (Supabase edge function + VAPID;
-  on iOS push requires the installed PWA).
-- Native app (Expo) wrapping the same API, if App Store distribution is wanted.
+- Push notifications for feed events (Supabase edge function + VAPID for web
+  push; expo-notifications for the native app).
+- EAS build profiles + App Store release.
