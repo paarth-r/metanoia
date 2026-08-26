@@ -1,0 +1,789 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Metanoia</title>
+<meta name="description" content="Metanoia: a 30-day reset. Choose your daily non-negotiables, tick them for thirty days, and let the ledger tell the truth.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='4' y='4' width='24' height='24' fill='none' stroke='%231C1A15' stroke-width='3'/%3E%3Cpath d='M10 16l4 5 8-11' fill='none' stroke='%231C1A15' stroke-width='3'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,600;1,400;1,500&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#F5F2EA; --card:#FCFAF4; --ink:#1C1A15; --muted:#7A7362;
+  --line:#DCD6C5; --line-soft:#E8E3D5; --danger:#96402F; --paper:#F5F2EA;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#141310; --card:#1C1A16; --ink:#E9E4D5; --muted:#8F8873;
+    --line:#333027; --line-soft:#27251F; --danger:#C96A52; --paper:#141310;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#141310; --card:#1C1A16; --ink:#E9E4D5; --muted:#8F8873;
+  --line:#333027; --line-soft:#27251F; --danger:#C96A52; --paper:#141310;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);
+  font-family:"IBM Plex Mono","SF Mono",Menlo,Consolas,monospace;
+  font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:620px;margin:0 auto;padding:28px 18px 80px}
+.eyebrow{font-size:11px;letter-spacing:.22em;color:var(--muted);text-transform:uppercase}
+h1{font-family:"Cormorant Garamond",Georgia,serif;font-weight:600;font-size:52px;
+  line-height:1.05;letter-spacing:.01em;margin:6px 0 2px;text-wrap:balance}
+.sub{font-family:"Cormorant Garamond",Georgia,serif;font-style:italic;font-size:20px;
+  line-height:1.4;color:var(--muted);margin:8px 0 0;text-wrap:balance}
+.statrow{display:flex;gap:0;margin-top:18px;border-top:1px solid var(--line);
+  border-bottom:1px solid var(--line)}
+.stat{flex:1;padding:10px 4px;text-align:center}
+.stat+.stat{border-left:1px solid var(--line)}
+.stat b{display:block;font-family:"Cormorant Garamond",Georgia,serif;font-weight:600;
+  font-size:30px;line-height:1.1;font-variant-numeric:tabular-nums}
+.stat span{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+.quote{font-family:"Cormorant Garamond",Georgia,serif;font-style:italic;font-size:19px;
+  line-height:1.45;margin:22px 0 6px;text-wrap:balance}
+.quote-a{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:26px}
+.card{background:var(--card);border:1px solid var(--line);padding:18px 16px;margin-bottom:22px}
+.dayhead{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px}
+.dayhead .dn{font-family:"Cormorant Garamond",Georgia,serif;font-weight:600;font-size:24px}
+.dayhead .dd{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.habit{display:flex;align-items:center;gap:14px;width:100%;padding:11px 4px;
+  background:none;border:none;border-top:1px solid var(--line-soft);cursor:pointer;
+  font:inherit;color:var(--ink);text-align:left}
+.habit:last-of-type{border-bottom:1px solid var(--line-soft)}
+.habit:focus-visible{outline:2px solid var(--ink);outline-offset:-2px}
+.habit[disabled]{cursor:default;opacity:.45}
+.box{width:21px;height:21px;flex:none;border:1.5px solid var(--ink);position:relative}
+.habit.on .box{background:var(--ink)}
+.habit.on .box::after{content:"";position:absolute;left:6px;top:2px;width:6px;height:11px;
+  border:solid var(--paper);border-width:0 2px 2px 0;transform:rotate(42deg)}
+.habit.on .lbl{color:var(--muted)}
+.scoreline{display:flex;justify-content:space-between;align-items:center;margin-top:12px;gap:10px;flex-wrap:wrap}
+.scoreline b{font-family:"Cormorant Garamond",Georgia,serif;font-weight:600;font-size:22px;
+  font-variant-numeric:tabular-nums}
+.miss{font-size:11px;color:var(--danger);letter-spacing:.06em}
+h2{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--muted);
+  font-weight:500;margin:0 0 10px}
+.wmeta{font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.7}
+.wmeta em{font-family:"Cormorant Garamond",Georgia,serif;font-style:italic;font-size:15px;color:var(--ink)}
+.targets{display:flex;flex-wrap:wrap;gap:8px}
+.tgt{display:flex;align-items:center;gap:7px;border:1px solid var(--line);padding:7px 10px}
+.tgt .tl{font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+.pip{width:15px;height:15px;border:1.5px solid var(--ink);background:none;padding:0;cursor:pointer}
+.pip:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+.pip.on{background:var(--ink)}
+.pip[disabled]{cursor:default;opacity:.4}
+.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:7px}
+.cell{border:1px solid var(--line);background:var(--card);padding:7px 6px 6px;cursor:pointer;
+  font:inherit;color:var(--ink);text-align:left}
+.cell:focus-visible{outline:2px solid var(--ink);outline-offset:-2px}
+.cell .n{font-family:"Cormorant Garamond",Georgia,serif;font-weight:600;font-size:19px;
+  line-height:1;display:block;margin-bottom:6px;font-variant-numeric:tabular-nums}
+.cell .bar{height:3px;background:var(--line-soft);display:block}
+.cell .bar i{display:block;height:100%;background:var(--ink)}
+.cell.future{opacity:.35;cursor:default}
+.cell.perfect{background:var(--ink);border-color:var(--ink)}
+.cell.perfect .n{color:var(--paper)}
+.cell.perfect .bar{background:var(--paper);opacity:.25}
+.cell.sel{outline:2px solid var(--ink);outline-offset:-2px}
+.cell.zero-past .n{color:var(--danger)}
+.foot{margin-top:26px;font-size:11px;color:var(--muted);line-height:1.8}
+.foot a{color:var(--muted)}
+.btn{display:inline-block;font:inherit;font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+  background:var(--ink);color:var(--paper);border:1.5px solid var(--ink);padding:12px 22px;
+  cursor:pointer;text-decoration:none;text-align:center}
+.btn.ghost{background:none;color:var(--ink)}
+.btn:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.btnrow{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}
+.rules{margin:26px 0 0;border-top:1px solid var(--line)}
+.rule{padding:14px 0;border-bottom:1px solid var(--line)}
+.rule b{font-family:"Cormorant Garamond",Georgia,serif;font-weight:600;font-size:19px;display:block}
+.rule span{font-size:12px;color:var(--muted)}
+.steplbl{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.q{font-family:"Cormorant Garamond",Georgia,serif;font-weight:600;font-size:28px;line-height:1.2;
+  margin-bottom:6px;text-wrap:balance}
+.hint{font-size:12px;color:var(--muted);margin-bottom:16px;line-height:1.7}
+input[type=text],input[type=date],input[type=number],textarea{
+  font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);
+  padding:10px 12px;width:100%}
+input:focus-visible,textarea:focus-visible{outline:2px solid var(--ink);outline-offset:-1px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 14px}
+.chipb{font:inherit;font-size:12px;border:1.5px solid var(--line);background:var(--card);
+  color:var(--ink);padding:8px 12px;cursor:pointer}
+.chipb.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.chipb:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+.addrow{display:flex;gap:8px;margin-bottom:6px}
+.addrow input{flex:1}
+.addrow .btn{padding:10px 14px}
+.count{font-size:11px;color:var(--muted);letter-spacing:.1em}
+.tlist{margin:4px 0 14px;border-top:1px solid var(--line-soft)}
+.trow{display:flex;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid var(--line-soft)}
+.trow .tl2{flex:1;font-size:13px}
+.trow .xb{font:inherit;background:none;border:none;color:var(--danger);cursor:pointer;font-size:12px;padding:4px}
+.err{font-size:12px;color:var(--danger);margin-bottom:10px}
+.navrow{display:flex;justify-content:space-between;margin-top:24px;gap:10px}
+.io{display:none;margin-top:12px}
+.io.open{display:block}
+.io textarea{height:90px;font-size:11px}
+@media (prefers-reduced-motion: reduce){*{transition:none !important}}
+@media (max-width:420px){h1{font-size:40px}.grid{grid-template-columns:repeat(5,1fr)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+'use strict';
+
+/* ---------- constants ---------- */
+
+var TOTAL = 30;
+var PLAN_KEY = 'metanoia_plan_v1';
+var STATE_KEY = 'metanoia_state_v1';
+
+var QUOTES = [
+  ['You have power over your mind, not outside events. Realize this, and you will find strength.', 'Marcus Aurelius'],
+  ['Waste no more time arguing about what a good man should be. Be one.', 'Marcus Aurelius'],
+  ['It is not that we have a short time to live, but that we waste a lot of it.', 'Seneca'],
+  ['No man is free who is not master of himself.', 'Epictetus'],
+  ['The impediment to action advances action. What stands in the way becomes the way.', 'Marcus Aurelius'],
+  ['First say to yourself what you would be; and then do what you have to do.', 'Epictetus'],
+  ['Luck is what happens when preparation meets opportunity.', 'Seneca'],
+  ['If it is not right, do not do it; if it is not true, do not say it.', 'Marcus Aurelius'],
+  ['We suffer more often in imagination than in reality.', 'Seneca'],
+  ['Do not explain your philosophy. Embody it.', 'Epictetus'],
+  ['The best revenge is to be unlike him who performed the injury.', 'Marcus Aurelius'],
+  ['Difficulties strengthen the mind, as labor does the body.', 'Seneca'],
+  ['How long are you going to wait before you demand the best for yourself?', 'Epictetus'],
+  ['Confine yourself to the present.', 'Marcus Aurelius'],
+  ['While we wait for life, life passes.', 'Seneca'],
+  ['Progress is not achieved by luck or accident, but by working on yourself daily.', 'Epictetus'],
+  ['The soul becomes dyed with the color of its thoughts.', 'Marcus Aurelius'],
+  ['He who is brave is free.', 'Seneca'],
+  ['It is not what happens to you, but how you react to it that matters.', 'Epictetus'],
+  ['Do every act of your life as though it were the last act of your life.', 'Marcus Aurelius'],
+  ['Begin at once to live, and count each separate day as a separate life.', 'Seneca'],
+  ['Wealth consists not in having great possessions, but in having few wants.', 'Epictetus'],
+  ['Very little is needed to make a happy life; it is all within yourself.', 'Marcus Aurelius'],
+  ['Nothing is ours, except time.', 'Seneca'],
+  ['Only the educated are free.', 'Epictetus'],
+  ['That which is not good for the swarm, neither is it good for the bee.', 'Marcus Aurelius'],
+  ['Each night, ask yourself: what weakness did I overcome today? What virtue did I acquire?', 'Seneca'],
+  ['Circumstances do not make the man; they only reveal him to himself.', 'Epictetus'],
+  ['When you arise in the morning, think of what a precious privilege it is to be alive.', 'Marcus Aurelius'],
+  ['As long as you live, keep learning how to live.', 'Seneca']
+];
+
+var HABIT_SUGGESTIONS = [
+  'No phone, first 30 min',
+  '90-min deep work block',
+  'Train (lift, run, or sport)',
+  '20 min reading',
+  '1 deliberate social rep',
+  'Zero short-form feeds',
+  'Evening review (3 lines)',
+  'Wake before 7',
+  '10 min meditation',
+  'In bed by 11',
+  'No sugar',
+  '10k steps'
+];
+
+var TARGET_SUGGESTIONS = [
+  ['Lift', 3],
+  ['Cardio', 2],
+  ['Deep project session', 2],
+  ['Reach out to someone', 1],
+  ['Weekly review', 1],
+  ['Practice a skill', 2]
+];
+
+var PAARTH_PLAN = {
+  name: "Paarth's Reset",
+  intent: 'Dopamine detox. Immaculate grades. Money, golf, iron discipline.',
+  startISO: '2026-08-25',
+  habits: [
+    'No phone, first 30 min',
+    '90-min deep work block',
+    'Homework + 30 min ahead',
+    '20 min philosophy',
+    '1 social rep',
+    'Zero short-form',
+    'Evening review'
+  ],
+  targets: [
+    ['Lift', 3], ['Golf', 1], ['Mashgin', 2], ['Hyperform', 2],
+    ['FRC', 2], ['Repair action', 1], ['Sunday review', 1]
+  ],
+  weekMeta: [
+    null,
+    { social: 'Presence basics', reading: 'Meditations, Books I-VI' },
+    { social: 'Initiation', reading: 'Meditations VII-XII + Seneca' },
+    { social: 'Command', reading: 'Machiavelli, The Prince' },
+    { social: 'Composure under stakes', reading: 'Notes from Underground' }
+  ]
+};
+
+/* ---------- storage ---------- */
+
+function lsGet(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+function lsDel(k) { try { localStorage.removeItem(k); } catch (e) {} }
+
+var plan = lsGet(PLAN_KEY);
+var state = lsGet(STATE_KEY) || { days: {}, weeks: {} };
+if (!state.days) state.days = {};
+if (!state.weeks) state.weeks = {};
+
+/* ---------- date helpers ---------- */
+
+function parseISO(iso) {
+  var p = String(iso || '').split('-');
+  return new Date(+p[0], +p[1] - 1, +p[2]);
+}
+function isoToday() {
+  var n = new Date();
+  return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0') + '-' +
+    String(n.getDate()).padStart(2, '0');
+}
+function todayNum() {
+  var n = new Date();
+  var t0 = new Date(n.getFullYear(), n.getMonth(), n.getDate());
+  return Math.round((t0 - parseISO(plan.startISO)) / 864e5) + 1;
+}
+function dateOf(d) {
+  var x = parseISO(plan.startISO);
+  x.setDate(x.getDate() + (d - 1));
+  return x;
+}
+function fmt(d) {
+  var D = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  var M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var x = dateOf(d);
+  return D[x.getDay()] + ' ' + M[x.getMonth()] + ' ' + x.getDate();
+}
+function weekOf(d) { return Math.min(4, Math.ceil(d / 7)); }
+
+/* ---------- state helpers ---------- */
+
+function nHabits() { return plan.habits.length; }
+function dayArr(d) {
+  if (!state.days[d]) { state.days[d] = []; for (var i = 0; i < nHabits(); i++) state.days[d].push(false); }
+  while (state.days[d].length < nHabits()) state.days[d].push(false);
+  return state.days[d];
+}
+function weekObj(w) {
+  if (!state.weeks[w]) {
+    var o = {};
+    for (var i = 0; i < plan.targets.length; i++) {
+      var arr = []; for (var j = 0; j < plan.targets[i][1]; j++) arr.push(false);
+      o[i] = arr;
+    }
+    state.weeks[w] = o;
+  }
+  return state.weeks[w];
+}
+function score(d) {
+  var a = state.days[d]; if (!a) return 0;
+  var n = 0; for (var i = 0; i < a.length && i < nHabits(); i++) if (a[i]) n++;
+  return n;
+}
+function stats() {
+  var tn = todayNum();
+  var upto = Math.min(tn, TOTAL);
+  if (upto < 1) return { avg: '-', perfect: 0, streak: 0 };
+  var sum = 0, perfect = 0;
+  for (var d = 1; d <= upto; d++) { var sc = score(d); sum += sc; if (sc === nHabits()) perfect++; }
+  var streak = 0, start = upto;
+  if (score(upto) < nHabits()) start = upto - 1;
+  for (var d2 = start; d2 >= 1; d2--) { if (score(d2) === nHabits()) streak++; else break; }
+  return { avg: (sum / upto).toFixed(1), perfect: perfect, streak: streak };
+}
+function persist() { lsSet(STATE_KEY, state); }
+
+/* ---------- dom helpers ---------- */
+
+function el(tag, cls, text) {
+  var e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+function clear() { var r = document.getElementById('root'); r.textContent = ''; return r; }
+
+/* ---------- landing ---------- */
+
+function renderLanding() {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  wrap.appendChild(el('div', 'eyebrow', 'A thirty-day reset'));
+  wrap.appendChild(el('h1', null, 'Metanoia'));
+  wrap.appendChild(el('div', 'sub',
+    'noun. A transformative change of heart and mind; the moment you turn your life around.'));
+
+  var rules = el('div', 'rules');
+  var R = [
+    ['Choose your non-negotiables.', 'Three to seven things you will do every single day. Not goals. Actions.'],
+    ['Tick them for thirty days.', 'The ledger fills in black when you are perfect and red when you were not there at all.'],
+    ['Never miss twice.', 'One slip is a data point. Two in a row is a new habit forming in the wrong direction.']
+  ];
+  for (var i = 0; i < R.length; i++) {
+    var ru = el('div', 'rule');
+    ru.appendChild(el('b', null, R[i][0]));
+    ru.appendChild(el('span', null, R[i][1]));
+    rules.appendChild(ru);
+  }
+  wrap.appendChild(rules);
+
+  var br = el('div', 'btnrow');
+  var b1 = el('a', 'btn', plan ? 'Open my ledger' : 'Start your 30 days');
+  b1.href = plan ? '#/track' : '#/new';
+  br.appendChild(b1);
+  if (!plan || plan.name !== PAARTH_PLAN.name) {
+    var b2 = el('a', 'btn ghost', "See Paarth's reset");
+    b2.href = '#/paarth';
+    br.appendChild(b2);
+  }
+  wrap.appendChild(br);
+
+  var q = QUOTES[new Date().getDate() % QUOTES.length];
+  wrap.appendChild(el('div', 'quote', '"' + q[0] + '"'));
+  wrap.appendChild(el('div', 'quote-a', q[1]));
+
+  var foot = el('div', 'foot');
+  foot.textContent = 'Your plan lives in this browser only. Nothing is uploaded, there are no accounts. Export from the ledger to move devices.';
+  wrap.appendChild(foot);
+  root.appendChild(wrap);
+}
+
+/* ---------- walkthrough ---------- */
+
+var W = null;
+function freshW() {
+  return { step: 1, name: '', intent: '', startISO: isoToday(), habits: [], targets: [], err: '' };
+}
+
+function renderWizard() {
+  if (!W) W = freshW();
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  wrap.appendChild(el('div', 'eyebrow', 'Metanoia'));
+  wrap.appendChild(el('div', 'steplbl', 'Step ' + W.step + ' of 4'));
+
+  var card = el('div', 'card');
+  if (W.err) card.appendChild(el('div', 'err', W.err));
+
+  if (W.step === 1) {
+    card.appendChild(el('div', 'q', 'What is this reset called, and why now?'));
+    card.appendChild(el('div', 'hint',
+      'Name it like it matters. Then one sentence on what you are turning around. You will read it every day for a month.'));
+    var nameIn = el('input');
+    nameIn.type = 'text'; nameIn.placeholder = 'My Reset'; nameIn.value = W.name; nameIn.maxLength = 40;
+    nameIn.addEventListener('input', function () { W.name = nameIn.value; });
+    card.appendChild(nameIn);
+    card.appendChild(el('div', 'hint', ''));
+    var intentIn = el('textarea');
+    intentIn.placeholder = 'Why now. What changes.'; intentIn.value = W.intent; intentIn.maxLength = 140;
+    intentIn.addEventListener('input', function () { W.intent = intentIn.value; });
+    card.appendChild(intentIn);
+  }
+
+  if (W.step === 2) {
+    card.appendChild(el('div', 'q', 'When does day one begin?'));
+    card.appendChild(el('div', 'hint',
+      'Today is the honest answer. A start date in the future is usually procrastination wearing a calendar.'));
+    var dIn = el('input');
+    dIn.type = 'date'; dIn.value = W.startISO;
+    dIn.addEventListener('input', function () { if (dIn.value) W.startISO = dIn.value; });
+    card.appendChild(dIn);
+  }
+
+  if (W.step === 3) {
+    card.appendChild(el('div', 'q', 'Your daily non-negotiables.'));
+    card.appendChild(el('div', 'hint',
+      'Pick 3 to 7. Every one must be a concrete action you can tick before midnight, on your worst day, not just your best.'));
+    var chips = el('div', 'chips');
+    for (var i = 0; i < HABIT_SUGGESTIONS.length; i++) {
+      (function (label) {
+        var on = W.habits.indexOf(label) >= 0;
+        var c = el('button', 'chipb' + (on ? ' on' : ''), label);
+        c.type = 'button';
+        c.addEventListener('click', function () {
+          var ix = W.habits.indexOf(label);
+          if (ix >= 0) W.habits.splice(ix, 1);
+          else if (W.habits.length < 7) W.habits.push(label);
+          W.err = ''; renderWizard();
+        });
+        chips.appendChild(c);
+      })(HABIT_SUGGESTIONS[i]);
+    }
+    card.appendChild(chips);
+    var ar = el('div', 'addrow');
+    var custom = el('input'); custom.type = 'text'; custom.placeholder = 'Add your own'; custom.maxLength = 40;
+    var addB = el('button', 'btn ghost', 'Add'); addB.type = 'button';
+    function addCustom() {
+      var v = custom.value.trim();
+      if (!v) return;
+      if (W.habits.length >= 7) { W.err = 'Seven is the cap. Discipline is subtraction.'; renderWizard(); return; }
+      if (W.habits.indexOf(v) < 0) W.habits.push(v);
+      custom.value = ''; W.err = ''; renderWizard();
+    }
+    addB.addEventListener('click', addCustom);
+    custom.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); addCustom(); } });
+    ar.appendChild(custom); ar.appendChild(addB);
+    card.appendChild(ar);
+    card.appendChild(el('div', 'count', W.habits.length + ' of 7 chosen (minimum 3)'));
+    if (W.habits.length) {
+      var tl = el('div', 'tlist');
+      for (var h = 0; h < W.habits.length; h++) {
+        (function (ix) {
+          var row = el('div', 'trow');
+          row.appendChild(el('span', 'tl2', W.habits[ix]));
+          var x = el('button', 'xb', 'remove'); x.type = 'button';
+          x.addEventListener('click', function () { W.habits.splice(ix, 1); renderWizard(); });
+          row.appendChild(x);
+          tl.appendChild(row);
+        })(h);
+      }
+      card.appendChild(tl);
+    }
+  }
+
+  if (W.step === 4) {
+    card.appendChild(el('div', 'q', 'Weekly targets.'));
+    card.appendChild(el('div', 'hint',
+      'Things that happen a few times a week, not daily: training sessions, project blocks, one hard conversation. Optional but recommended. Tap a suggestion or add your own with a per-week count.'));
+    var chips2 = el('div', 'chips');
+    for (var s = 0; s < TARGET_SUGGESTIONS.length; s++) {
+      (function (sug) {
+        var have = W.targets.some(function (t) { return t[0] === sug[0]; });
+        var c = el('button', 'chipb' + (have ? ' on' : ''), sug[0] + ' x' + sug[1]);
+        c.type = 'button';
+        c.addEventListener('click', function () {
+          var ix = -1;
+          for (var k = 0; k < W.targets.length; k++) if (W.targets[k][0] === sug[0]) ix = k;
+          if (ix >= 0) W.targets.splice(ix, 1);
+          else if (W.targets.length < 8) W.targets.push([sug[0], sug[1]]);
+          renderWizard();
+        });
+        chips2.appendChild(c);
+      })(TARGET_SUGGESTIONS[s]);
+    }
+    card.appendChild(chips2);
+    var ar2 = el('div', 'addrow');
+    var tIn = el('input'); tIn.type = 'text'; tIn.placeholder = 'Custom target'; tIn.maxLength = 30;
+    var cIn = el('input'); cIn.type = 'number'; cIn.min = 1; cIn.max = 7; cIn.value = 2; cIn.style.width = '70px'; cIn.style.flex = 'none';
+    var addT = el('button', 'btn ghost', 'Add'); addT.type = 'button';
+    addT.addEventListener('click', function () {
+      var v = tIn.value.trim();
+      var n = Math.max(1, Math.min(7, parseInt(cIn.value, 10) || 1));
+      if (!v || W.targets.length >= 8) return;
+      W.targets.push([v, n]); tIn.value = ''; renderWizard();
+    });
+    ar2.appendChild(tIn); ar2.appendChild(cIn); ar2.appendChild(addT);
+    card.appendChild(ar2);
+    if (W.targets.length) {
+      var tl2 = el('div', 'tlist');
+      for (var t = 0; t < W.targets.length; t++) {
+        (function (ix) {
+          var row = el('div', 'trow');
+          row.appendChild(el('span', 'tl2', W.targets[ix][0] + '  x' + W.targets[ix][1] + ' per week'));
+          var x = el('button', 'xb', 'remove'); x.type = 'button';
+          x.addEventListener('click', function () { W.targets.splice(ix, 1); renderWizard(); });
+          row.appendChild(x);
+          tl2.appendChild(row);
+        })(t);
+      }
+      card.appendChild(tl2);
+    }
+  }
+
+  wrap.appendChild(card);
+
+  var nav = el('div', 'navrow');
+  var back = el('button', 'btn ghost', W.step === 1 ? 'Cancel' : 'Back'); back.type = 'button';
+  back.addEventListener('click', function () {
+    if (W.step === 1) { W = null; location.hash = '#/'; return; }
+    W.step--; W.err = ''; renderWizard();
+  });
+  var fwd = el('button', 'btn', W.step === 4 ? 'Begin the thirty days' : 'Continue'); fwd.type = 'button';
+  fwd.addEventListener('click', function () {
+    if (W.step === 3 && W.habits.length < 3) { W.err = 'Pick at least three. Fewer than that is not a reset.'; renderWizard(); return; }
+    if (W.step < 4) { W.step++; W.err = ''; renderWizard(); return; }
+    plan = {
+      name: W.name.trim() || 'My Reset',
+      intent: W.intent.trim(),
+      startISO: W.startISO,
+      habits: W.habits.slice(),
+      targets: W.targets.slice(),
+      weekMeta: null
+    };
+    state = { days: {}, weeks: {} };
+    lsSet(PLAN_KEY, plan); persist();
+    W = null;
+    location.hash = '#/track';
+  });
+  nav.appendChild(back); nav.appendChild(fwd);
+  wrap.appendChild(nav);
+  root.appendChild(wrap);
+}
+
+/* ---------- tracker ---------- */
+
+var sel = null;
+
+function renderTracker() {
+  if (!plan) { location.hash = '#/new'; return; }
+  var root = clear();
+  var tn = todayNum();
+  if (sel == null) sel = Math.max(1, Math.min(TOTAL, tn));
+
+  var wrap = el('div', 'wrap');
+  var startTxt = fmt(1) + ' - ' + fmt(TOTAL);
+  wrap.appendChild(el('div', 'eyebrow', startTxt));
+  wrap.appendChild(el('h1', null, plan.name));
+  if (plan.intent) wrap.appendChild(el('div', 'sub', plan.intent));
+
+  var st = stats();
+  var row = el('div', 'statrow');
+  var pairs = tn < 1
+    ? [['-' + (-tn + 1), 'days to start'], ['-', 'streak'], ['-', 'perfect']]
+    : tn > TOTAL
+      ? [['Done', 'thirty days'], [String(st.perfect), 'perfect days'], [st.avg, 'avg score']]
+      : [['Day ' + tn, 'of 30'], [String(st.streak), 'streak'], [st.avg, 'avg /' + nHabits()]];
+  for (var i = 0; i < pairs.length; i++) {
+    var stEl = el('div', 'stat');
+    stEl.appendChild(el('b', null, pairs[i][0]));
+    stEl.appendChild(el('span', null, pairs[i][1]));
+    row.appendChild(stEl);
+  }
+  wrap.appendChild(row);
+
+  var q = QUOTES[(Math.max(1, Math.min(TOTAL, Math.max(tn, 1))) - 1) % QUOTES.length];
+  wrap.appendChild(el('div', 'quote', '"' + q[0] + '"'));
+  wrap.appendChild(el('div', 'quote-a', q[1]));
+
+  /* day card */
+  var editable = tn >= 1 && sel <= tn;
+  var card = el('div', 'card');
+  var dh = el('div', 'dayhead');
+  dh.appendChild(el('span', 'dn', 'Day ' + sel));
+  dh.appendChild(el('span', 'dd', fmt(sel) + (sel === tn ? ' - today' : '')));
+  card.appendChild(dh);
+  var arr = dayArr(sel);
+  for (var h = 0; h < nHabits(); h++) {
+    (function (h2) {
+      var b = el('button', 'habit' + (arr[h2] ? ' on' : ''));
+      b.type = 'button';
+      if (!editable) b.disabled = true;
+      b.appendChild(el('span', 'box'));
+      b.appendChild(el('span', 'lbl', plan.habits[h2]));
+      b.addEventListener('click', function () {
+        if (!editable) return;
+        arr[h2] = !arr[h2];
+        persist(); renderTracker();
+      });
+      card.appendChild(b);
+    })(h);
+  }
+  var sl = el('div', 'scoreline');
+  var sc = score(sel);
+  sl.appendChild(el('b', null, sc + ' / ' + nHabits()));
+  if (sel < tn && sc < nHabits()) sl.appendChild(el('span', 'miss', (nHabits() - sc) + ' missed'));
+  if (dateOf(sel).getDay() === 0) sl.appendChild(el('span', 'dd', 'Sunday: review the week'));
+  card.appendChild(sl);
+  wrap.appendChild(card);
+
+  /* weekly targets */
+  if (plan.targets.length) {
+    var w = weekOf(Math.max(1, Math.min(TOTAL, sel)));
+    var wcard = el('div', 'card');
+    wcard.appendChild(el('h2', null, 'Week ' + w + ' targets'));
+    if (plan.weekMeta && plan.weekMeta[w]) {
+      var wm = el('div', 'wmeta');
+      wm.appendChild(document.createTextNode('Social: '));
+      wm.appendChild(el('em', null, plan.weekMeta[w].social));
+      wm.appendChild(document.createTextNode('  -  Reading: '));
+      wm.appendChild(el('em', null, plan.weekMeta[w].reading));
+      wcard.appendChild(wm);
+    }
+    var wEditable = tn >= 1 && w <= weekOf(Math.max(1, Math.min(TOTAL, tn)));
+    var tg = el('div', 'targets');
+    var wo = weekObj(w);
+    for (var t = 0; t < plan.targets.length; t++) {
+      var box = el('div', 'tgt');
+      box.appendChild(el('span', 'tl', plan.targets[t][0]));
+      var pips = wo[t] || [];
+      for (var p = 0; p < pips.length; p++) {
+        (function (t2, p2) {
+          var pip = el('button', 'pip' + (wo[t2][p2] ? ' on' : ''));
+          pip.type = 'button';
+          pip.setAttribute('aria-label', plan.targets[t2][0] + ' ' + (p2 + 1));
+          if (!wEditable) pip.disabled = true;
+          pip.addEventListener('click', function () {
+            if (!wEditable) return;
+            wo[t2][p2] = !wo[t2][p2];
+            persist(); renderTracker();
+          });
+          box.appendChild(pip);
+        })(t, p);
+      }
+      tg.appendChild(box);
+    }
+    wcard.appendChild(tg);
+    wrap.appendChild(wcard);
+  }
+
+  /* 30-day grid */
+  var gcard = el('div', 'card');
+  gcard.appendChild(el('h2', null, 'The thirty days'));
+  var grid = el('div', 'grid');
+  for (var d = 1; d <= TOTAL; d++) {
+    (function (d2) {
+      var scD = score(d2);
+      var cls = 'cell';
+      if (d2 > tn) cls += ' future';
+      if (scD === nHabits() && nHabits() > 0) cls += ' perfect';
+      if (d2 < tn && scD === 0) cls += ' zero-past';
+      if (d2 === sel) cls += ' sel';
+      var c = el('button', cls);
+      c.type = 'button';
+      if (d2 > tn) c.disabled = true;
+      c.appendChild(el('span', 'n', String(d2)));
+      var bar = el('span', 'bar');
+      var fill = el('i');
+      fill.style.width = (nHabits() ? Math.round(scD / nHabits() * 100) : 0) + '%';
+      bar.appendChild(fill);
+      c.appendChild(bar);
+      c.addEventListener('click', function () {
+        if (d2 > tn) return;
+        sel = d2; renderTracker();
+        window.scrollTo({ top: 0 });
+      });
+      grid.appendChild(c);
+    })(d);
+  }
+  gcard.appendChild(grid);
+  wrap.appendChild(gcard);
+
+  /* data controls */
+  var io = el('div', 'card');
+  io.appendChild(el('h2', null, 'Your data'));
+  var br = el('div', 'btnrow'); br.style.marginTop = '0';
+  var exB = el('button', 'btn ghost', 'Export'); exB.type = 'button';
+  var imB = el('button', 'btn ghost', 'Import'); imB.type = 'button';
+  var rsB = el('button', 'btn ghost', 'Start over'); rsB.type = 'button';
+  br.appendChild(exB); br.appendChild(imB); br.appendChild(rsB);
+  io.appendChild(br);
+  var ioBox = el('div', 'io');
+  var ta = el('textarea');
+  ioBox.appendChild(ta);
+  var ioBtn = el('button', 'btn', 'Load this data'); ioBtn.type = 'button'; ioBtn.style.marginTop = '8px';
+  ioBox.appendChild(ioBtn);
+  io.appendChild(ioBox);
+  exB.addEventListener('click', function () {
+    ioBox.classList.add('open');
+    ta.value = JSON.stringify({ plan: plan, state: state });
+    ta.focus(); ta.select();
+  });
+  imB.addEventListener('click', function () {
+    ioBox.classList.add('open');
+    ta.value = ''; ta.placeholder = 'Paste an export here, then press Load.';
+    ta.focus();
+  });
+  ioBtn.addEventListener('click', function () {
+    try {
+      var obj = JSON.parse(ta.value);
+      if (!obj.plan || !obj.plan.habits || !obj.plan.startISO) throw new Error('bad');
+      plan = obj.plan;
+      state = obj.state && obj.state.days ? obj.state : { days: {}, weeks: {} };
+      lsSet(PLAN_KEY, plan); persist();
+      sel = null; renderTracker();
+    } catch (e) { ta.value = 'That did not parse as a Metanoia export. Paste the exact exported text.'; }
+  });
+  rsB.addEventListener('click', function () {
+    if (!confirm('Erase this plan and all thirty days of ticks from this browser?')) return;
+    lsDel(PLAN_KEY); lsDel(STATE_KEY);
+    plan = null; state = { days: {}, weeks: {} }; sel = null; W = null;
+    location.hash = '#/';
+  });
+  wrap.appendChild(io);
+
+  var foot = el('div', 'foot');
+  foot.textContent = tn > TOTAL
+    ? 'The thirty days are over. Decide what continues. Metanoia is not the month; it is what the month proved.'
+    : 'Never miss twice. Done before dopamine. The scorecard is the verdict on the day, not your feelings.';
+  wrap.appendChild(foot);
+  root.appendChild(wrap);
+}
+
+/* ---------- paarth preview ---------- */
+
+function renderPaarth() {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  wrap.appendChild(el('div', 'eyebrow', 'The original - Aug 25 to Sep 23, 2026'));
+  wrap.appendChild(el('h1', null, PAARTH_PLAN.name));
+  wrap.appendChild(el('div', 'sub', PAARTH_PLAN.intent));
+
+  var card = el('div', 'card'); card.style.marginTop = '24px';
+  card.appendChild(el('h2', null, 'Daily non-negotiables'));
+  for (var i = 0; i < PAARTH_PLAN.habits.length; i++) {
+    var b = el('div', 'habit');
+    b.appendChild(el('span', 'box'));
+    b.appendChild(el('span', 'lbl', PAARTH_PLAN.habits[i]));
+    card.appendChild(b);
+  }
+  wrap.appendChild(card);
+
+  var card2 = el('div', 'card');
+  card2.appendChild(el('h2', null, 'Weekly targets'));
+  var tg = el('div', 'targets');
+  for (var t = 0; t < PAARTH_PLAN.targets.length; t++) {
+    var box = el('div', 'tgt');
+    box.appendChild(el('span', 'tl', PAARTH_PLAN.targets[t][0] + ' x' + PAARTH_PLAN.targets[t][1]));
+    tg.appendChild(box);
+  }
+  card2.appendChild(tg);
+  var wm = el('div', 'wmeta'); wm.style.marginTop = '12px'; wm.style.marginBottom = '0';
+  wm.appendChild(document.createTextNode('Four escalating weeks: '));
+  wm.appendChild(el('em', null, 'presence, initiation, command, composure'));
+  wm.appendChild(document.createTextNode(' - read alongside: Marcus Aurelius, Seneca, Machiavelli, Dostoevsky.'));
+  card2.appendChild(wm);
+  wrap.appendChild(card2);
+
+  var br = el('div', 'btnrow');
+  var use = el('button', 'btn', 'Use this plan'); use.type = 'button';
+  use.addEventListener('click', function () {
+    if (plan && !confirm('Replace the plan already in this browser?')) return;
+    plan = JSON.parse(JSON.stringify(PAARTH_PLAN));
+    state = { days: {}, weeks: {} };
+    lsSet(PLAN_KEY, plan); persist();
+    sel = null;
+    location.hash = '#/track';
+  });
+  var own = el('a', 'btn ghost', 'Build your own');
+  own.href = '#/new';
+  br.appendChild(use); br.appendChild(own);
+  wrap.appendChild(br);
+
+  var foot = el('div', 'foot');
+  foot.textContent = 'Using this plan starts your own thirty days from Aug 25, 2026, with these exact non-negotiables. Building your own takes about two minutes.';
+  wrap.appendChild(foot);
+  root.appendChild(wrap);
+}
+
+/* ---------- router ---------- */
+
+function route() {
+  var h = location.hash || '#/';
+  sel = null;
+  if (h === '#/new') { W = W || freshW(); renderWizard(); }
+  else if (h === '#/track') renderTracker();
+  else if (h === '#/paarth') renderPaarth();
+  else renderLanding();
+}
+addEventListener('hashchange', route);
+route();
+</script>
+</body>
+</html>
