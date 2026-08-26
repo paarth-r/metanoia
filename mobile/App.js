@@ -4,8 +4,9 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   View, Text, TextInput, Pressable, ScrollView, FlatList, StyleSheet,
   useColorScheme, ActivityIndicator, Alert, RefreshControl, SafeAreaView,
-  StatusBar, Platform,
+  StatusBar, Platform, Image, KeyboardAvoidingView,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import {
   useFonts,
   CormorantGaramond_600SemiBold,
@@ -20,13 +21,17 @@ import {
 
 /* ---------- theme ---------- */
 
+/* Old leather ledger: parchment pages on a leather desk, sepia ink,
+   stitched borders, muted gold hairlines. */
 const LIGHT = {
-  bg: '#F5F2EA', card: '#FCFAF4', ink: '#1C1A15', muted: '#7A7362',
-  line: '#DCD6C5', lineSoft: '#E8E3D5', danger: '#96402F', paper: '#F5F2EA',
+  bg: '#EDE3CB', card: '#F8F2E1', ink: '#2B2013', muted: '#8A7657',
+  line: '#D6C9A8', lineSoft: '#E5DBBE', danger: '#8E3B2C', paper: '#F8F2E1',
+  leather: '#5E3B22', gold: '#A07C3B', stitch: '#C9B488', onLeather: '#F6EFDD',
 };
 const DARK = {
-  bg: '#141310', card: '#1C1A16', ink: '#E9E4D5', muted: '#8F8873',
-  line: '#333027', lineSoft: '#27251F', danger: '#C96A52', paper: '#141310',
+  bg: '#171008', card: '#211910', ink: '#EDE1C7', muted: '#9C8A6A',
+  line: '#3A2E1E', lineSoft: '#2C2315', danger: '#C2604A', paper: '#171008',
+  leather: '#7A4E2A', gold: '#B08D4F', stitch: '#57452C',
 };
 function useTheme() {
   return useColorScheme() === 'dark' ? DARK : LIGHT;
@@ -50,7 +55,13 @@ function Hint({ c, children, style }) {
   return <Text style={[{ fontFamily: MONO, fontSize: 12, color: c.muted, lineHeight: 19, marginBottom: 14 }, style]}>{children}</Text>;
 }
 function Card({ c, children, style }) {
-  return <View style={[{ backgroundColor: c.card, borderWidth: 1, borderColor: c.line, padding: 16, marginBottom: 20 }, style]}>{children}</View>;
+  return (
+    <View style={[{ backgroundColor: c.card, borderWidth: 1, borderColor: c.line, borderRadius: 8, padding: 4, marginBottom: 20 }, style]}>
+      <View style={{ borderWidth: 1, borderStyle: 'dashed', borderColor: c.stitch, borderRadius: 5, padding: 14 }}>
+        {children}
+      </View>
+    </View>
+  );
 }
 function Btn({ c, label, onPress, ghost, small, disabled, style }) {
   return (
@@ -58,20 +69,35 @@ function Btn({ c, label, onPress, ghost, small, disabled, style }) {
       onPress={onPress}
       disabled={disabled}
       style={({ pressed }) => [{
-        backgroundColor: ghost ? 'transparent' : c.ink,
-        borderWidth: 1.5, borderColor: c.ink,
-        paddingVertical: small ? 8 : 13, paddingHorizontal: small ? 13 : 22,
-        opacity: disabled ? 0.4 : pressed ? 0.7 : 1,
+        backgroundColor: ghost ? 'transparent' : c.leather,
+        borderWidth: 1.5, borderColor: c.leather, borderRadius: 5,
+        paddingVertical: small ? 9 : 14, paddingHorizontal: small ? 14 : 24,
+        opacity: disabled ? 0.4 : pressed ? 0.75 : 1,
         alignItems: 'center',
       }, style]}
     >
       <Text style={{
         fontFamily: MONO_M, fontSize: small ? 11 : 12, letterSpacing: 1.6,
-        textTransform: 'uppercase', color: ghost ? c.ink : c.paper,
+        textTransform: 'uppercase', color: ghost ? c.ink : c.onLeather,
       }}>
         {label}
       </Text>
     </Pressable>
+  );
+}
+function PageHeader({ c, eyebrow, title, right, sub }) {
+  return (
+    <View style={{ marginBottom: 16 }}>
+      {eyebrow ? (
+        <Text style={{ fontFamily: MONO, fontSize: 11, letterSpacing: 2.2, textTransform: 'uppercase', color: c.muted }}>{eyebrow}</Text>
+      ) : null}
+      <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' }}>
+        <Text style={{ fontFamily: SERIF, fontSize: 36, color: c.ink }}>{title}</Text>
+        {right || null}
+      </View>
+      {sub ? <Text style={{ fontFamily: SERIF_I, fontSize: 17, color: c.muted, marginTop: 2 }}>{sub}</Text> : null}
+      <View style={{ width: 54, height: 2, backgroundColor: c.gold, marginTop: 10 }} />
+    </View>
   );
 }
 function Input({ c, style, ...props }) {
@@ -96,13 +122,13 @@ function VTag({ c, v }) {
 
 /* ---------- ledger (shared editable / read-only) ---------- */
 
-function CheckBoxMark({ c, on, size = 21 }) {
+function CheckBoxMark({ c, on, size = 24 }) {
   return (
     <View style={{
-      width: size, height: size, borderWidth: 1.5, borderColor: c.ink,
-      backgroundColor: on ? c.ink : 'transparent', alignItems: 'center', justifyContent: 'center',
+      width: size, height: size, borderWidth: 2, borderColor: c.leather, borderRadius: 4,
+      backgroundColor: on ? c.leather : 'transparent', alignItems: 'center', justifyContent: 'center',
     }}>
-      {on ? <Text style={{ color: c.paper, fontSize: size * 0.62, fontFamily: MONO_M, lineHeight: size * 0.8 }}>x</Text> : null}
+      {on ? <Text style={{ color: c.onLeather, fontSize: size * 0.6, fontFamily: MONO_M, lineHeight: size * 0.78 }}>x</Text> : null}
     </View>
   );
 }
@@ -152,7 +178,7 @@ function Ledger({ c, plan, getDay, getWeek, onToggleDay, onToggleWeek, readOnly,
             onPress={() => onToggleDay(day, i)}
             style={({ pressed }) => ({
               flexDirection: 'row', alignItems: 'center', gap: 14,
-              paddingVertical: 12, borderTopWidth: 1, borderColor: c.lineSoft,
+              paddingVertical: 14, borderTopWidth: 1, borderColor: c.lineSoft,
               opacity: !editable && !readOnly ? 0.45 : pressed ? 0.7 : 1,
             })}
           >
@@ -189,9 +215,10 @@ function Ledger({ c, plan, getDay, getWeek, onToggleDay, onToggleWeek, readOnly,
                     key={pi}
                     disabled={!wEditable}
                     onPress={() => onToggleWeek(w, ti, pi)}
+                    hitSlop={6}
                     style={{
-                      width: 15, height: 15, borderWidth: 1.5, borderColor: c.ink,
-                      backgroundColor: wo[ti] && wo[ti][pi] ? c.ink : 'transparent',
+                      width: 18, height: 18, borderWidth: 2, borderColor: c.leather, borderRadius: 3,
+                      backgroundColor: wo[ti] && wo[ti][pi] ? c.leather : 'transparent',
                       opacity: wEditable || readOnly ? 1 : 0.4,
                     }}
                   />
@@ -217,16 +244,16 @@ function Ledger({ c, plan, getDay, getWeek, onToggleDay, onToggleWeek, readOnly,
                 disabled={future || !setSel}
                 onPress={() => setSel && setSel(d)}
                 style={{
-                  width: '15%', minWidth: 46, borderWidth: 1,
-                  borderColor: isPerfect ? c.ink : d === day ? c.ink : c.line,
-                  backgroundColor: isPerfect ? c.ink : c.card,
+                  width: '15%', minWidth: 46, borderWidth: 1, borderRadius: 5,
+                  borderColor: isPerfect ? c.leather : d === day ? c.gold : c.line,
+                  backgroundColor: isPerfect ? c.leather : c.card,
                   padding: 6, opacity: future ? 0.35 : 1,
                   ...(d === day && !isPerfect ? { borderWidth: 2 } : {}),
                 }}
               >
-                <Text style={{ fontFamily: SERIF, fontSize: 17, color: isPerfect ? c.paper : zeroPast ? c.danger : c.ink }}>{d}</Text>
-                <View style={{ height: 3, backgroundColor: isPerfect ? c.paper : c.lineSoft, marginTop: 5, opacity: isPerfect ? 0.3 : 1 }}>
-                  <View style={{ height: 3, width: `${nH ? Math.round((s / nH) * 100) : 0}%`, backgroundColor: c.ink }} />
+                <Text style={{ fontFamily: SERIF, fontSize: 17, color: isPerfect ? c.onLeather : zeroPast ? c.danger : c.ink }}>{d}</Text>
+                <View style={{ height: 3, backgroundColor: isPerfect ? c.onLeather : c.lineSoft, marginTop: 5, opacity: isPerfect ? 0.35 : 1 }}>
+                  <View style={{ height: 3, width: `${nH ? Math.round((s / nH) * 100) : 0}%`, backgroundColor: isPerfect ? 'transparent' : c.leather }} />
                 </View>
               </Pressable>
             );
@@ -641,7 +668,7 @@ export default function App() {
   }
 
   const tabs = [
-    ['ledger', 'Ledger'], ['feed', 'Feed'], ['people', 'People'], ['account', 'Account'],
+    ['ledger', 'Ledger'], ['feed', 'Feed'], ['social', 'Social'], ['account', 'Account'],
   ];
 
   return shell(
@@ -655,32 +682,43 @@ export default function App() {
           <FeedScreen c={c} me={session.user.id} onOpenUser={setViewUser}
             onSeen={() => setFeedUnseen(0)} />
         ) : null}
-        {tab === 'people' ? (
-          <PeopleScreen c={c} me={session.user.id} onOpenUser={setViewUser} say={say} />
+        {tab === 'social' ? (
+          <SocialScreen c={c} me={session.user.id} onOpenUser={setViewUser} say={say} />
         ) : null}
         {tab === 'account' ? (
           <AccountScreen c={c} profile={profile} SP={SP} setSP={setSP}
             onProfileSaved={() => loadProfile(session)} say={say} />
         ) : null}
       </View>
-      <View style={{ flexDirection: 'row', borderTopWidth: 1, borderColor: c.line, backgroundColor: c.card }}>
-        {tabs.map(([key, label]) => (
-          <Pressable key={key} onPress={() => { setTab(key); if (key === 'feed') setFeedUnseen(0); }}
-            style={{ flex: 1, paddingVertical: 13, alignItems: 'center' }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-              <Text style={{
-                fontFamily: MONO_M, fontSize: 11, letterSpacing: 1.6, textTransform: 'uppercase',
-                color: tab === key ? c.ink : c.muted,
-                borderBottomWidth: tab === key ? 1.5 : 0, borderColor: c.ink,
-              }}>{label}</Text>
-              {key === 'feed' && feedUnseen > 0 ? (
-                <View style={{ backgroundColor: c.danger, borderRadius: 8, paddingHorizontal: 5, paddingVertical: 1 }}>
-                  <Text style={{ fontFamily: MONO_M, fontSize: 9, color: '#F5F2EA' }}>{feedUnseen > 9 ? '9+' : feedUnseen}</Text>
+      <View style={{ paddingHorizontal: 14, paddingBottom: 6, backgroundColor: 'transparent' }}>
+        <View style={{
+          flexDirection: 'row', gap: 4, padding: 5, borderRadius: 30,
+          backgroundColor: c.card, borderWidth: 1, borderColor: c.line,
+        }}>
+          {tabs.map(([key, label]) => {
+            const active = tab === key;
+            return (
+              <Pressable key={key} onPress={() => { setTab(key); if (key === 'feed') setFeedUnseen(0); }}
+                style={({ pressed }) => ({
+                  flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 24,
+                  backgroundColor: active ? c.leather : 'transparent',
+                  opacity: pressed ? 0.8 : 1,
+                })}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                  <Text style={{
+                    fontFamily: MONO_M, fontSize: 12, letterSpacing: 1.2, textTransform: 'uppercase',
+                    color: active ? c.onLeather : c.muted,
+                  }}>{label}</Text>
+                  {key === 'feed' && feedUnseen > 0 ? (
+                    <View style={{ backgroundColor: c.danger, borderRadius: 8, paddingHorizontal: 5, paddingVertical: 1 }}>
+                      <Text style={{ fontFamily: MONO_M, fontSize: 9, color: '#F6EFDD' }}>{feedUnseen > 9 ? '9+' : feedUnseen}</Text>
+                    </View>
+                  ) : null}
                 </View>
-              ) : null}
-            </View>
-          </Pressable>
-        ))}
+              </Pressable>
+            );
+          })}
+        </View>
       </View>
     </View>
   );
@@ -692,7 +730,7 @@ function LedgerScreen({ c, SP, toggleDay, toggleWeek, sel, setSel, onCreate, onA
   if (!SP) {
     return (
       <ScrollView contentContainerStyle={{ padding: 18, paddingTop: 30 }}>
-        <Text style={{ fontFamily: SERIF, fontSize: 40, color: c.ink }}>No reset yet</Text>
+        <PageHeader c={c} eyebrow="Your ledger" title="No reset yet" />
         <Card c={c} style={{ marginTop: 18 }}>
           <Hint c={c}>Build your thirty days, or adopt the original plan.</Hint>
           <Btn c={c} label="Build my plan" onPress={onCreate} />
@@ -710,14 +748,11 @@ function LedgerScreen({ c, SP, toggleDay, toggleWeek, sel, setSel, onCreate, onA
   const plan = planRowToObj(SP.plan);
   return (
     <ScrollView contentContainerStyle={{ padding: 18, paddingTop: 24, paddingBottom: 40 }}>
-      <Text style={{ fontFamily: MONO, fontSize: 11, letterSpacing: 2.2, textTransform: 'uppercase', color: c.muted }}>
-        {fmtDay(plan.startISO, 1)} - {fmtDay(plan.startISO, TOTAL)}
-      </Text>
-      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
-        <Text style={{ fontFamily: SERIF, fontSize: 38, color: c.ink }}>{plan.name}</Text>
-        <VTag c={c} v={plan.visibility} />
-      </View>
-      {plan.intent ? <Text style={{ fontFamily: SERIF_I, fontSize: 17, color: c.muted, marginTop: 4 }}>{plan.intent}</Text> : null}
+      <PageHeader c={c}
+        eyebrow={`${fmtDay(plan.startISO, 1)} - ${fmtDay(plan.startISO, TOTAL)}`}
+        title={plan.name}
+        right={<VTag c={c} v={plan.visibility} />}
+        sub={plan.intent || null} />
       <Ledger c={c} plan={plan}
         getDay={(d) => SP.days[d]} getWeek={(w) => SP.weeks[w]}
         onToggleDay={toggleDay} onToggleWeek={toggleWeek}
@@ -731,9 +766,38 @@ function LedgerScreen({ c, SP, toggleDay, toggleWeek, sel, setSel, onCreate, onA
 
 /* ---------- feed ---------- */
 
+const REACTION_KINDS = [['respect', 'Respect'], ['locked_in', 'Locked in'], ['soft', 'Soft']];
+
 function FeedScreen({ c, me, onOpenUser, onSeen }) {
   const [events, setEvents] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [reactions, setReactions] = useState({});
+  const [reactionsOn, setReactionsOn] = useState(true);
+
+  const loadReactions = useCallback(async (evs) => {
+    const ids = evs.map((e) => e.id);
+    if (!ids.length) { setReactions({}); return; }
+    const rr = await sb.from('feed_reactions').select('*').in('event_id', ids);
+    if (rr.error) { setReactionsOn(false); return; }
+    const map = {};
+    (rr.data || []).forEach((r) => {
+      if (!map[r.event_id]) map[r.event_id] = { counts: {}, mine: null };
+      map[r.event_id].counts[r.kind] = (map[r.event_id].counts[r.kind] || 0) + 1;
+      if (r.user_id === me) map[r.event_id].mine = r.kind;
+    });
+    setReactions(map);
+  }, [me]);
+
+  const react = async (ev, kind) => {
+    const cur = reactions[ev.id];
+    if (cur && cur.mine === kind) {
+      await sb.from('feed_reactions').delete().eq('event_id', ev.id).eq('user_id', me);
+    } else {
+      await sb.from('feed_reactions').upsert(
+        { event_id: ev.id, user_id: me, kind }, { onConflict: 'event_id,user_id' });
+    }
+    loadReactions(events || []);
+  };
 
   const load = useCallback(async () => {
     const r = await sb.from('feed_events')
@@ -748,8 +812,9 @@ function FeedScreen({ c, me, onOpenUser, onSeen }) {
       out.push(ev);
     });
     setEvents(out);
+    loadReactions(out);
     onSeen();
-  }, [onSeen]);
+  }, [onSeen, loadReactions]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -773,7 +838,7 @@ function FeedScreen({ c, me, onOpenUser, onSeen }) {
       keyExtractor={(ev) => String(ev.id)}
       contentContainerStyle={{ padding: 18, paddingTop: 24, paddingBottom: 40 }}
       refreshControl={<RefreshControl refreshing={refreshing} tintColor={c.muted} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}
-      ListHeaderComponent={<Text style={{ fontFamily: SERIF, fontSize: 38, color: c.ink, marginBottom: 12 }}>Feed</Text>}
+      ListHeaderComponent={<PageHeader c={c} eyebrow="The accountability wire" title="Feed" />}
       ListEmptyComponent={events === null
         ? <ActivityIndicator color={c.ink} style={{ marginTop: 30 }} />
         : <Hint c={c}>Quiet in here. Add friends or join a group under People, and their ticks show up as they happen.</Hint>}
@@ -783,11 +848,11 @@ function FeedScreen({ c, me, onOpenUser, onSeen }) {
         return (
           <View style={{ flexDirection: 'row', gap: 12, paddingVertical: 13, borderBottomWidth: 1, borderColor: c.lineSoft }}>
             <View style={{
-              width: 34, height: 34, borderWidth: 1.5, borderColor: c.ink,
-              backgroundColor: isPerfect ? c.ink : 'transparent',
+              width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, borderColor: c.leather,
+              backgroundColor: isPerfect ? c.leather : 'transparent',
               alignItems: 'center', justifyContent: 'center',
             }}>
-              <Text style={{ fontFamily: SERIF, fontSize: 17, color: isPerfect ? c.paper : c.ink, textTransform: 'uppercase' }}>{uname[0]}</Text>
+              <Text style={{ fontFamily: SERIF, fontSize: 17, color: isPerfect ? c.onLeather : c.ink, textTransform: 'uppercase' }}>{uname[0]}</Text>
             </View>
             <View style={{ flex: 1 }}>
               <Text style={{ fontFamily: MONO, fontSize: 13, color: c.ink, lineHeight: 19 }}>
@@ -799,7 +864,33 @@ function FeedScreen({ c, me, onOpenUser, onSeen }) {
               <Text style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1.4, textTransform: 'uppercase', color: c.muted, marginTop: 3 }}>{ago(ev.created_at)}</Text>
               {(ev.kind === 'tick' || ev.kind === 'perfect') && ev.payload?.total ? (
                 <View style={{ height: 3, backgroundColor: c.lineSoft, marginTop: 8, maxWidth: 180 }}>
-                  <View style={{ height: 3, width: `${Math.round((ev.payload.score / ev.payload.total) * 100)}%`, backgroundColor: c.ink }} />
+                  <View style={{ height: 3, width: `${Math.round((ev.payload.score / ev.payload.total) * 100)}%`, backgroundColor: c.leather }} />
+                </View>
+              ) : null}
+              {reactionsOn ? (
+                <View style={{ flexDirection: 'row', gap: 6, marginTop: 9 }}>
+                  {REACTION_KINDS.map(([kind, label]) => {
+                    const rx = reactions[ev.id];
+                    const count = rx ? (rx.counts[kind] || 0) : 0;
+                    const mine = rx && rx.mine === kind;
+                    return (
+                      <Pressable key={kind} onPress={() => react(ev, kind)} hitSlop={4}
+                        style={{
+                          flexDirection: 'row', alignItems: 'center', gap: 5,
+                          borderWidth: 1.5, borderColor: mine ? c.leather : c.line, borderRadius: 14,
+                          backgroundColor: mine ? c.leather : 'transparent',
+                          paddingVertical: 4, paddingHorizontal: 10,
+                        }}>
+                        <Text style={{
+                          fontFamily: MONO_M, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase',
+                          color: mine ? c.onLeather : kind === 'soft' ? c.danger : c.muted,
+                        }}>{label}</Text>
+                        {count > 0 ? (
+                          <Text style={{ fontFamily: MONO_M, fontSize: 10, color: mine ? c.onLeather : c.ink }}>{count}</Text>
+                        ) : null}
+                      </Pressable>
+                    );
+                  })}
                 </View>
               ) : null}
             </View>
@@ -810,21 +901,297 @@ function FeedScreen({ c, me, onOpenUser, onSeen }) {
   );
 }
 
-/* ---------- people (friends + groups) ---------- */
+/* ---------- social: groups first, friends behind a door ---------- */
 
-function PeopleScreen({ c, me, onOpenUser, say }) {
-  const [query, setQuery] = useState('');
-  const [rows, setRows] = useState([]);
-  const [groups, setGroups] = useState([]);
+function GroupAvatar({ c, group, size = 44 }) {
+  if (group.image_url) {
+    return (
+      <Image source={{ uri: group.image_url }}
+        style={{ width: size, height: size, borderRadius: 8, borderWidth: 1, borderColor: c.line }} />
+    );
+  }
+  return (
+    <View style={{ width: size, height: size, borderRadius: 8, backgroundColor: c.leather, alignItems: 'center', justifyContent: 'center' }}>
+      <Text style={{ fontFamily: SERIF, fontSize: size * 0.5, color: c.onLeather, textTransform: 'uppercase' }}>{(group.name || '?')[0]}</Text>
+    </View>
+  );
+}
+
+function SocialScreen({ c, me, onOpenUser, say }) {
+  const [view, setView] = useState({ kind: 'home' });
+  const [groups, setGroups] = useState(null);
   const [gName, setGName] = useState('');
   const [gCode, setGCode] = useState('');
+
+  const loadGroups = useCallback(async () => {
+    const g = await sb.from('groups').select('*, group_members(user_id, profiles(username, display_name))');
+    setGroups(g.data || []);
+  }, []);
+  useEffect(() => { loadGroups(); }, [loadGroups]);
+
+  if (view.kind === 'friends') {
+    return <FriendsScreen c={c} me={me} onOpenUser={onOpenUser} say={say} onBack={() => setView({ kind: 'home' })} />;
+  }
+  if (view.kind === 'group') {
+    return <GroupScreen c={c} me={me} group={view.group} onOpenUser={onOpenUser} say={say}
+      onBack={() => { setView({ kind: 'home' }); loadGroups(); }} />;
+  }
+
+  return (
+    <ScrollView contentContainerStyle={{ padding: 18, paddingTop: 24, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+      <PageHeader c={c} eyebrow="Groups and friends" title="Social" />
+      <Card c={c}>
+        <H2 c={c}>Your groups</H2>
+        {groups === null ? <ActivityIndicator color={c.ink} /> : null}
+        {groups && !groups.length ? (
+          <Hint c={c} style={{ marginBottom: 0 }}>
+            No groups yet. Create one and share the invite code: the group sees each other's ledgers and feed, and gets a private chat.
+          </Hint>
+        ) : null}
+        {(groups || []).map((g) => (
+          <Pressable key={g.id} onPress={() => setView({ kind: 'group', group: g })}
+            style={({ pressed }) => ({
+              flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12,
+              borderBottomWidth: 1, borderColor: c.lineSoft, opacity: pressed ? 0.7 : 1,
+            })}>
+            <GroupAvatar c={c} group={g} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontFamily: SERIF, fontSize: 20, color: c.ink }}>{g.name}</Text>
+              <Text style={{ fontFamily: MONO, fontSize: 11, color: c.muted }}>
+                {(g.group_members || []).length} member{(g.group_members || []).length === 1 ? '' : 's'}
+              </Text>
+            </View>
+            <Text style={{ fontFamily: SERIF, fontSize: 22, color: c.gold }}>{'>'}</Text>
+          </Pressable>
+        ))}
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
+          <Input c={c} placeholder="New group name" value={gName} onChangeText={setGName} maxLength={40} style={{ flex: 1 }} />
+          <Btn c={c} label="Create" onPress={async () => {
+            const v = gName.trim(); if (!v) return;
+            const r = await sb.rpc('create_group', { gname: v });
+            if (r.error) say('Could not create.');
+            setGName(''); loadGroups();
+          }} />
+        </View>
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+          <Input c={c} placeholder="Invite code" autoCapitalize="none" value={gCode} onChangeText={setGCode} style={{ flex: 1 }} />
+          <Btn c={c} label="Join" ghost onPress={async () => {
+            const v = gCode.trim(); if (!v) return;
+            const r = await sb.rpc('join_group', { code: v });
+            say(r.error ? 'Could not join.' : 'Joined.');
+            setGCode(''); loadGroups();
+          }} />
+        </View>
+      </Card>
+      <Btn c={c} label="Friends" onPress={() => setView({ kind: 'friends' })} />
+      <Hint c={c} style={{ marginTop: 10 }}>Requests, your friends list, and adding people by username.</Hint>
+    </ScrollView>
+  );
+}
+
+function BackRow({ c, onBack, label }) {
+  return (
+    <Pressable onPress={onBack} hitSlop={8} style={{ marginBottom: 12, alignSelf: 'flex-start' }}>
+      <Text style={{ fontFamily: MONO_M, fontSize: 12, letterSpacing: 1.4, textTransform: 'uppercase', color: c.muted }}>
+        {'< '}{label || 'Social'}
+      </Text>
+    </Pressable>
+  );
+}
+
+function GroupScreen({ c, me, group, onOpenUser, say, onBack }) {
+  const [g, setG] = useState(group);
+  const [section, setSection] = useState('chat');
+  const [msgs, setMsgs] = useState(null);
+  const [draft, setDraft] = useState('');
+  const [chatReady, setChatReady] = useState(true);
+
+  const loadMsgs = useCallback(async () => {
+    const r = await sb.from('group_messages')
+      .select('*, profiles(username, display_name)')
+      .eq('group_id', group.id)
+      .order('created_at', { ascending: false }).limit(100);
+    if (r.error) { setChatReady(false); setMsgs([]); return; }
+    setChatReady(true);
+    setMsgs(r.data || []);
+  }, [group.id]);
+  useEffect(() => { loadMsgs(); }, [loadMsgs]);
+  useEffect(() => {
+    const ch = sb.channel('chat-' + group.id)
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'group_messages', filter: 'group_id=eq.' + group.id },
+        () => loadMsgs())
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [group.id, loadMsgs]);
+
+  const send = async () => {
+    const v = draft.trim(); if (!v) return;
+    setDraft('');
+    const r = await sb.from('group_messages').insert({ group_id: group.id, user_id: me, body: v });
+    if (r.error) say('Could not send.');
+    else loadMsgs();
+  };
+
+  const pickImage = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) { say('Photo access was denied.'); return; }
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.6, base64: true,
+    });
+    if (res.canceled || !res.assets || !res.assets[0].base64) return;
+    say('Uploading...');
+    try {
+      const bin = atob(res.assets[0].base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const path = group.id + '.jpg';
+      const up = await sb.storage.from('group-images').upload(path, bytes.buffer, {
+        contentType: 'image/jpeg', upsert: true,
+      });
+      if (up.error) { say('Upload failed.'); return; }
+      const { data } = sb.storage.from('group-images').getPublicUrl(path);
+      const url = data.publicUrl + '?t=' + Date.now();
+      const r2 = await sb.from('groups').update({ image_url: url }).eq('id', group.id);
+      if (r2.error) { say('Could not save the image.'); return; }
+      setG({ ...g, image_url: url });
+      say('Group image updated.');
+    } catch (e) { say('Upload failed.'); }
+  };
+
+  const members = g.group_members || [];
+  const sections = [['chat', 'Chat'], ['members', 'Members'], ['settings', 'Settings']];
+
+  return (
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }} keyboardVerticalOffset={60}>
+      <View style={{ flex: 1, padding: 18, paddingTop: 24 }}>
+        <BackRow c={c} onBack={onBack} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+          <GroupAvatar c={c} group={g} size={52} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontFamily: SERIF, fontSize: 28, color: c.ink }}>{g.name}</Text>
+            <Text style={{ fontFamily: MONO, fontSize: 11, color: c.muted }}>{members.length} member{members.length === 1 ? '' : 's'}</Text>
+          </View>
+        </View>
+        <View style={{ flexDirection: 'row', gap: 4, padding: 4, borderRadius: 24, backgroundColor: c.card, borderWidth: 1, borderColor: c.line, marginBottom: 14 }}>
+          {sections.map(([key, label]) => (
+            <Pressable key={key} onPress={() => setSection(key)}
+              style={{ flex: 1, paddingVertical: 9, alignItems: 'center', borderRadius: 20, backgroundColor: section === key ? c.leather : 'transparent' }}>
+              <Text style={{ fontFamily: MONO_M, fontSize: 11, letterSpacing: 1.2, textTransform: 'uppercase', color: section === key ? c.onLeather : c.muted }}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+
+        {section === 'chat' ? (
+          <View style={{ flex: 1 }}>
+            {!chatReady ? (
+              <Card c={c}><Hint c={c} style={{ marginBottom: 0 }}>Chat is being set up on the backend. Check back shortly.</Hint></Card>
+            ) : (
+              <FlatList
+                inverted
+                data={msgs || []}
+                keyExtractor={(m) => String(m.id)}
+                ListEmptyComponent={msgs === null
+                  ? <ActivityIndicator color={c.ink} style={{ marginTop: 20, transform: [{ scaleY: -1 }] }} />
+                  : <Text style={{ fontFamily: MONO, fontSize: 12, color: c.muted, transform: [{ scaleY: -1 }], textAlign: 'center', marginTop: 20 }}>Quiet in here. Say something.</Text>}
+                renderItem={({ item: m }) => {
+                  const mine = m.user_id === me;
+                  return (
+                    <View style={{ alignItems: mine ? 'flex-end' : 'flex-start', marginBottom: 10 }}>
+                      {!mine ? (
+                        <Text style={{ fontFamily: MONO_M, fontSize: 10, letterSpacing: 1, textTransform: 'uppercase', color: c.muted, marginBottom: 2 }}>
+                          {m.profiles?.display_name || m.profiles?.username || '?'}
+                        </Text>
+                      ) : null}
+                      <View style={{
+                        maxWidth: '82%', paddingVertical: 9, paddingHorizontal: 13, borderRadius: 14,
+                        backgroundColor: mine ? c.leather : c.card,
+                        borderWidth: mine ? 0 : 1, borderColor: c.line,
+                      }}>
+                        <Text style={{ fontFamily: MONO, fontSize: 13, lineHeight: 19, color: mine ? c.onLeather : c.ink }}>{m.body}</Text>
+                      </View>
+                      <Text style={{ fontFamily: MONO, fontSize: 9, color: c.muted, marginTop: 2 }}>{ago(m.created_at)}</Text>
+                    </View>
+                  );
+                }}
+              />
+            )}
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+              <Input c={c} placeholder="Write to the group" value={draft} onChangeText={setDraft}
+                style={{ flex: 1, borderRadius: 22, paddingHorizontal: 16 }} maxLength={2000}
+                onSubmitEditing={send} returnKeyType="send" />
+              <Btn c={c} label="Send" onPress={send} style={{ borderRadius: 22 }} />
+            </View>
+          </View>
+        ) : null}
+
+        {section === 'members' ? (
+          <ScrollView>
+            <Card c={c}>
+              {members.map((m, mi) => (
+                <Pressable key={mi} onPress={() => m.profiles?.username && onOpenUser(m.profiles.username)}
+                  style={({ pressed }) => ({
+                    flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12,
+                    borderBottomWidth: mi === members.length - 1 ? 0 : 1, borderColor: c.lineSoft,
+                    opacity: pressed ? 0.7 : 1,
+                  })}>
+                  <View style={{ width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, borderColor: c.leather, alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ fontFamily: SERIF, fontSize: 17, color: c.ink, textTransform: 'uppercase' }}>
+                      {(m.profiles?.username || '?')[0]}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontFamily: MONO_M, fontSize: 14, color: c.ink }}>{m.profiles?.display_name || m.profiles?.username || 'unnamed'}</Text>
+                    {m.profiles?.username ? <Text style={{ fontFamily: MONO, fontSize: 11, color: c.muted }}>@{m.profiles.username}</Text> : null}
+                  </View>
+                  <Text style={{ fontFamily: SERIF, fontSize: 20, color: c.gold }}>{'>'}</Text>
+                </Pressable>
+              ))}
+            </Card>
+            <Hint c={c}>Tap a member to see their ledger. Group-mates see each other's friends-tier plans; private stays private.</Hint>
+          </ScrollView>
+        ) : null}
+
+        {section === 'settings' ? (
+          <ScrollView>
+            <Card c={c}>
+              <H2 c={c}>Group image</H2>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+                <GroupAvatar c={c} group={g} size={64} />
+                <Btn c={c} label="Change image" ghost small onPress={pickImage} />
+              </View>
+            </Card>
+            <Card c={c}>
+              <H2 c={c}>Invite code</H2>
+              <Text selectable style={{ fontFamily: SERIF, fontSize: 30, letterSpacing: 3, color: c.ink }}>{g.invite_code}</Text>
+              <Hint c={c} style={{ marginTop: 6, marginBottom: 0 }}>Anyone with this code can join from the Social page.</Hint>
+            </Card>
+            <Card c={c}>
+              <Btn c={c} label="Leave group" ghost onPress={() => {
+                Alert.alert('Leave group', 'Leave ' + g.name + '?', [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Leave', style: 'destructive', onPress: async () => {
+                    await sb.from('group_members').delete().eq('group_id', g.id).eq('user_id', me);
+                    onBack();
+                  } },
+                ]);
+              }} />
+            </Card>
+          </ScrollView>
+        ) : null}
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
+
+function FriendsScreen({ c, me, onOpenUser, say, onBack }) {
+  const [query, setQuery] = useState('');
+  const [rows, setRows] = useState([]);
 
   const load = useCallback(async () => {
     const r = await sb.from('friendships').select(
       '*, a:profiles!friendships_user_a_fkey(id, username, display_name), b:profiles!friendships_user_b_fkey(id, username, display_name)');
     setRows(r.data || []);
-    const g = await sb.from('groups').select('*, group_members(user_id, profiles(username, display_name))');
-    setGroups(g.data || []);
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -832,7 +1199,7 @@ function PeopleScreen({ c, me, onOpenUser, say }) {
     const v = query.trim().toLowerCase();
     if (!v) return;
     const p = await sb.from('profiles').select('id, username').eq('username', v).maybeSingle();
-    if (!p.data) { say(`No one has claimed "${v}".`); return; }
+    if (!p.data) { say('No one has claimed "' + v + '".'); return; }
     if (p.data.id === me) { say('That is you.'); return; }
     const a = me < p.data.id ? me : p.data.id;
     const b = me < p.data.id ? p.data.id : me;
@@ -853,7 +1220,8 @@ function PeopleScreen({ c, me, onOpenUser, say }) {
 
   return (
     <ScrollView contentContainerStyle={{ padding: 18, paddingTop: 24, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-      <Text style={{ fontFamily: SERIF, fontSize: 38, color: c.ink, marginBottom: 14 }}>People</Text>
+      <BackRow c={c} onBack={onBack} />
+      <PageHeader c={c} eyebrow="Witnesses to the thirty days" title="Friends" />
 
       <Card c={c}>
         <H2 c={c}>Add a friend</H2>
@@ -867,15 +1235,15 @@ function PeopleScreen({ c, me, onOpenUser, say }) {
         <Card c={c}>
           <H2 c={c}>Requests for you</H2>
           {incoming.map((f, i) => (
-            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 9, borderBottomWidth: 1, borderColor: c.lineSoft, gap: 8 }}>
+            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderColor: c.lineSoft, gap: 10 }}>
               <Pressable onPress={() => onOpenUser(f.other.username)} style={{ flex: 1 }}>
-                <Text style={{ fontFamily: MONO, fontSize: 13, color: c.ink, textDecorationLine: 'underline' }}>{f.other.display_name || f.other.username}</Text>
+                <Text style={{ fontFamily: MONO_M, fontSize: 14, color: c.ink }}>{f.other.display_name || f.other.username}</Text>
               </Pressable>
               <Btn c={c} small label="Accept" onPress={async () => {
                 await sb.from('friendships').update({ status: 'accepted' }).eq('user_a', f.row.user_a).eq('user_b', f.row.user_b);
                 load();
               }} />
-              <Pressable onPress={async () => {
+              <Pressable hitSlop={8} onPress={async () => {
                 await sb.from('friendships').delete().eq('user_a', f.row.user_a).eq('user_b', f.row.user_b);
                 load();
               }}>
@@ -890,12 +1258,12 @@ function PeopleScreen({ c, me, onOpenUser, say }) {
         <H2 c={c}>Friends</H2>
         {!friends.length ? <Hint c={c} style={{ marginBottom: 0 }}>No friends yet. Accountability needs witnesses.</Hint> : null}
         {friends.map((f, i) => (
-          <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 9, borderBottomWidth: 1, borderColor: c.lineSoft }}>
+          <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderColor: c.lineSoft }}>
             <Pressable onPress={() => onOpenUser(f.other.username)} style={{ flex: 1 }}>
-              <Text style={{ fontFamily: MONO, fontSize: 13, color: c.ink, textDecorationLine: 'underline' }}>{f.other.display_name || f.other.username}</Text>
+              <Text style={{ fontFamily: MONO_M, fontSize: 14, color: c.ink }}>{f.other.display_name || f.other.username}</Text>
             </Pressable>
-            <Pressable onPress={() => {
-              Alert.alert('Remove friend', `Remove ${f.other.username}?`, [
+            <Pressable hitSlop={8} onPress={() => {
+              Alert.alert('Remove friend', 'Remove ' + f.other.username + '?', [
                 { text: 'Cancel', style: 'cancel' },
                 { text: 'Remove', style: 'destructive', onPress: async () => {
                   await sb.from('friendships').delete().eq('user_a', f.row.user_a).eq('user_b', f.row.user_b);
@@ -908,60 +1276,10 @@ function PeopleScreen({ c, me, onOpenUser, say }) {
           </View>
         ))}
         {outgoing.map((f, i) => (
-          <View key={i} style={{ paddingVertical: 9, borderBottomWidth: 1, borderColor: c.lineSoft }}>
+          <View key={i} style={{ paddingVertical: 10, borderBottomWidth: 1, borderColor: c.lineSoft }}>
             <Text style={{ fontFamily: MONO, fontSize: 13, color: c.muted }}>{f.other.username}  (pending)</Text>
           </View>
         ))}
-      </Card>
-
-      <Card c={c}>
-        <H2 c={c}>Groups</H2>
-        <Hint c={c}>Everyone in a group sees each other's friends-tier ledgers and feed. Private plans stay private, even here.</Hint>
-        {groups.map((g) => (
-          <View key={g.id} style={{ paddingVertical: 10, borderBottomWidth: 1, borderColor: c.lineSoft }}>
-            <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
-              <Text style={{ fontFamily: SERIF, fontSize: 18, color: c.ink, flex: 1 }}>{g.name}</Text>
-              <Text style={{ fontFamily: MONO, fontSize: 11, color: c.muted }}>code {g.invite_code}</Text>
-            </View>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 5 }}>
-              {(g.group_members || []).map((m, mi) => (
-                <Pressable key={mi} onPress={() => m.profiles?.username && onOpenUser(m.profiles.username)}>
-                  <Text style={{ fontFamily: MONO, fontSize: 12, color: c.ink, textDecorationLine: 'underline' }}>
-                    {m.profiles?.username || '?'}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-            <Pressable style={{ marginTop: 6 }} onPress={async () => {
-              await sb.from('group_members').delete().eq('group_id', g.id).eq('user_id', me);
-              load();
-            }}>
-              <Text style={{ fontFamily: MONO, fontSize: 12, color: c.danger }}>leave</Text>
-            </Pressable>
-          </View>
-        ))}
-        <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
-          <Input c={c} placeholder="New group name" value={gName} onChangeText={setGName} maxLength={40} style={{ flex: 1 }} />
-          <Btn c={c} label="Create" ghost onPress={async () => {
-            const v = gName.trim();
-            if (!v) return;
-            const r = await sb.rpc('create_group', { gname: v });
-            if (r.error) say('Could not create.');
-            setGName('');
-            load();
-          }} />
-        </View>
-        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-          <Input c={c} placeholder="Invite code" autoCapitalize="none" value={gCode} onChangeText={setGCode} style={{ flex: 1 }} />
-          <Btn c={c} label="Join" ghost onPress={async () => {
-            const v = gCode.trim();
-            if (!v) return;
-            const r = await sb.rpc('join_group', { code: v });
-            say(r.error ? 'Could not join.' : 'Joined.');
-            setGCode('');
-            load();
-          }} />
-        </View>
       </Card>
     </ScrollView>
   );
@@ -1013,8 +1331,7 @@ function ProfileScreen({ c, username, me, onBack, say }) {
       ) : null}
       {prof ? (
         <>
-          <Text style={{ fontFamily: MONO, fontSize: 11, letterSpacing: 2.2, textTransform: 'uppercase', color: c.muted }}>The ledger of</Text>
-          <Text style={{ fontFamily: SERIF, fontSize: 38, color: c.ink }}>{prof.display_name || prof.username}</Text>
+          <PageHeader c={c} eyebrow="The ledger of" title={prof.display_name || prof.username} />
           {prof.id !== me && friendState === 'none' ? (
             <Btn c={c} label="Add friend" ghost style={{ alignSelf: 'flex-start', marginTop: 10 }} onPress={async () => {
               const a = me < prof.id ? me : prof.id;
@@ -1062,9 +1379,7 @@ function AccountScreen({ c, profile, SP, setSP, onProfileSaved, say }) {
 
   return (
     <ScrollView contentContainerStyle={{ padding: 18, paddingTop: 24, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-      <Text style={{ fontFamily: SERIF, fontSize: 38, color: c.ink, marginBottom: 14 }}>
-        {profile?.username ? `@${profile.username}` : 'Unnamed'}
-      </Text>
+      <PageHeader c={c} eyebrow="Account" title={profile?.username ? `@${profile.username}` : 'Unnamed'} />
 
       <Card c={c}>
         <H2 c={c}>Identity</H2>
