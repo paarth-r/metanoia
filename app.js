@@ -479,34 +479,111 @@ function renderLanding() {
   root.appendChild(wrap);
 }
 
+var authMode = 'signin'; // 'signin' | 'signup' | 'forgot'
+
 function renderAuth() {
   var root = clear();
   var wrap = el('div', 'wrap');
   wrap.appendChild(el('div', 'eyebrow', 'Metanoia'));
-  wrap.appendChild(el('div', 'q', 'Sign in'));
+  wrap.appendChild(el('div', 'q',
+    authMode === 'signup' ? 'Create account' : authMode === 'forgot' ? 'Reset password' : 'Sign in'));
   var card = el('div', 'card');
   if (!backendReady()) {
     card.appendChild(el('div', 'hint', 'The backend is not configured yet. Guest mode still works from the landing page.'));
     wrap.appendChild(card); root.appendChild(wrap); return;
   }
-  card.appendChild(el('div', 'hint',
-    'Magic link, no password. Enter your email and click the link it sends; you land back here signed in.'));
-  var ar = el('div', 'addrow');
+  var hint = authMode === 'signup'
+    ? 'You get one confirmation email. Click its link, then sign in.'
+    : authMode === 'forgot'
+      ? 'We email you a reset link. Open it here and set a new password.'
+      : 'Email and password.';
+  card.appendChild(el('div', 'hint', hint));
   var em = el('input'); em.type = 'email'; em.placeholder = 'you@example.com';
-  var go = el('button', 'btn', 'Send link'); go.type = 'button';
-  ar.appendChild(em); ar.appendChild(go);
-  card.appendChild(ar);
-  var msg = el('div', 'ok', '');
+  em.setAttribute('autocomplete', 'email');
+  card.appendChild(em);
+  var pw = null;
+  if (authMode !== 'forgot') {
+    pw = el('input'); pw.type = 'password';
+    pw.placeholder = authMode === 'signup' ? 'Password (8+ characters)' : 'Password';
+    pw.setAttribute('autocomplete', authMode === 'signup' ? 'new-password' : 'current-password');
+    pw.style.marginTop = '8px';
+    card.appendChild(pw);
+  }
+  var go = el('button', 'btn',
+    authMode === 'signup' ? 'Create account' : authMode === 'forgot' ? 'Send reset link' : 'Sign in');
+  go.type = 'button'; go.style.marginTop = '10px';
+  card.appendChild(go);
+  var msg = el('div', 'ok', ''); msg.style.marginTop = '10px';
   card.appendChild(msg);
+
   go.addEventListener('click', async function () {
     var v = em.value.trim();
     if (!v) return;
-    msg.textContent = 'Sending...';
-    var r = await sb.auth.signInWithOtp({
-      email: v,
-      options: { emailRedirectTo: location.origin + location.pathname }
-    });
-    msg.textContent = r.error ? ('Could not send: ' + r.error.message) : 'Sent. Check your email, then come back here.';
+    if (authMode === 'signin') {
+      msg.textContent = 'Signing in...';
+      var r = await sb.auth.signInWithPassword({ email: v, password: pw.value });
+      if (r.error) msg.textContent = /confirm/i.test(r.error.message)
+        ? 'Email not confirmed yet. Click the link in your confirmation email first.'
+        : 'Could not sign in: ' + r.error.message;
+      else location.hash = '#/track';
+    } else if (authMode === 'signup') {
+      if (pw.value.length < 8) { msg.textContent = 'Password needs 8+ characters.'; return; }
+      msg.textContent = 'Creating...';
+      var r2 = await sb.auth.signUp({
+        email: v, password: pw.value,
+        options: { emailRedirectTo: location.origin + location.pathname }
+      });
+      msg.textContent = r2.error ? ('Could not create: ' + r2.error.message)
+        : 'Account created. Check your email for the confirmation link, then sign in.';
+    } else {
+      msg.textContent = 'Sending...';
+      var r3 = await sb.auth.resetPasswordForEmail(v, {
+        redirectTo: location.origin + location.pathname
+      });
+      msg.textContent = r3.error ? ('Could not send: ' + r3.error.message)
+        : 'Sent. Open the link in that email; it lands back here to set a new password.';
+    }
+  });
+
+  var sw = el('div', 'btnrow');
+  if (authMode !== 'signin') {
+    var b1 = el('button', 'btn ghost', 'Sign in instead'); b1.type = 'button';
+    b1.addEventListener('click', function () { authMode = 'signin'; renderAuth(); });
+    sw.appendChild(b1);
+  }
+  if (authMode !== 'signup') {
+    var b2 = el('button', 'btn ghost', 'Create account'); b2.type = 'button';
+    b2.addEventListener('click', function () { authMode = 'signup'; renderAuth(); });
+    sw.appendChild(b2);
+  }
+  if (authMode === 'signin') {
+    var b3 = el('button', 'btn ghost', 'Forgot password'); b3.type = 'button';
+    b3.addEventListener('click', function () { authMode = 'forgot'; renderAuth(); });
+    sw.appendChild(b3);
+  }
+  card.appendChild(sw);
+  wrap.appendChild(card);
+  root.appendChild(wrap);
+}
+
+function renderRecover() {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  wrap.appendChild(el('div', 'eyebrow', 'Metanoia'));
+  wrap.appendChild(el('div', 'q', 'Set a new password'));
+  var card = el('div', 'card');
+  var pw = el('input'); pw.type = 'password'; pw.placeholder = 'New password (8+ characters)';
+  pw.setAttribute('autocomplete', 'new-password');
+  card.appendChild(pw);
+  var go = el('button', 'btn', 'Save password'); go.type = 'button'; go.style.marginTop = '10px';
+  card.appendChild(go);
+  var msg = el('div', 'ok', ''); msg.style.marginTop = '10px';
+  card.appendChild(msg);
+  go.addEventListener('click', async function () {
+    if (pw.value.length < 8) { msg.textContent = 'Password needs 8+ characters.'; return; }
+    var r = await sb.auth.updateUser({ password: pw.value });
+    if (r.error) msg.textContent = 'Failed: ' + r.error.message;
+    else { chip('Password set'); location.hash = '#/track'; }
   });
   wrap.appendChild(card);
   root.appendChild(wrap);
@@ -1299,6 +1376,25 @@ function renderSettings() {
     wrap.appendChild(pc);
   }
 
+  var pwc = el('div', 'card');
+  pwc.appendChild(el('h2', null, 'Password'));
+  pwc.appendChild(el('div', 'hint',
+    'Set or change the password you use to sign in here and in the mobile app. Accounts created before password sign-in need to set one once.'));
+  var pwIn = el('input'); pwIn.type = 'password'; pwIn.placeholder = 'New password (8+ characters)';
+  pwIn.setAttribute('autocomplete', 'new-password');
+  pwc.appendChild(pwIn);
+  var pwB = el('button', 'btn ghost', 'Save password'); pwB.type = 'button'; pwB.style.marginTop = '10px';
+  pwc.appendChild(pwB);
+  var pwMsg = el('div', 'ok', ''); pwMsg.style.marginTop = '8px';
+  pwc.appendChild(pwMsg);
+  pwB.addEventListener('click', async function () {
+    if (pwIn.value.length < 8) { pwMsg.textContent = 'Password needs 8+ characters.'; return; }
+    var r = await sb.auth.updateUser({ password: pwIn.value });
+    pwMsg.textContent = r.error ? ('Failed: ' + r.error.message) : 'Password saved. It works on the site and the mobile app.';
+    if (!r.error) pwIn.value = '';
+  });
+  wrap.appendChild(pwc);
+
   var api = el('div', 'card');
   api.appendChild(el('h2', null, 'API access'));
   api.appendChild(el('div', 'hint',
@@ -1336,6 +1432,7 @@ function route() {
   if (h === '#/people') { renderPeople(); return; }
   if (h === '#/settings') { renderSettings(); return; }
   if (h === '#/auth') { renderAuth(); return; }
+  if (h === '#/recover') { renderRecover(); return; }
   if (h === '#/paarth') { renderPaarthTemplate(); return; }
   renderLanding();
 }
@@ -1353,6 +1450,7 @@ async function boot() {
     sb.auth.onAuthStateChange(function (event, newSession) {
       var was = !!session;
       session = newSession;
+      if (event === 'PASSWORD_RECOVERY') { location.hash = '#/recover'; return; }
       if (!!session !== was) {
         loadMyProfile().then(loadMyPlan).then(function () {
           startRealtime(); route();
