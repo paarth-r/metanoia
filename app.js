@@ -1420,12 +1420,42 @@ function renderSettings() {
   wrap.appendChild(outc);
 }
 
+function renderJoin(code) {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  wrap.appendChild(el('div', 'eyebrow', 'Group invitation'));
+  wrap.appendChild(el('h1', null, 'Join a group'));
+  var card = el('div', 'card');
+  wrap.appendChild(card);
+  root.appendChild(wrap);
+  code = decodeURIComponent(code).trim().toLowerCase();
+  if (!signedIn()) {
+    card.appendChild(el('div', 'hint',
+      'Sign in (or create an account), then open this invite link again to join with code ' + code + '.'));
+    var b = el('a', 'btn', 'Sign in'); b.href = '#/auth';
+    card.appendChild(b);
+    return;
+  }
+  card.appendChild(el('div', 'hint', 'Joining with code ' + code + '...'));
+  sb.rpc('join_group', { code: code }).then(function (r) {
+    card.textContent = '';
+    if (r.error) {
+      card.appendChild(el('div', 'err', 'Could not join: ' + r.error.message));
+    } else {
+      card.appendChild(el('div', 'hint', 'You are in. The group sees your friends-tier ledger, and you see theirs.'));
+      var b2 = el('a', 'btn', 'Open Social'); b2.href = '#/people';
+      card.appendChild(b2);
+    }
+  });
+}
+
 /* ================= router ================= */
 
 function route() {
   var h = location.hash || '#/';
   renderNav();
   if (h.indexOf('#/u/') === 0) { renderProfile(h.slice(4)); return; }
+  if (h.indexOf('#/join/') === 0) { renderJoin(h.slice(7)); return; }
   if (h === '#/new') { renderWizard(); return; }
   if (h === '#/track') { renderTracker(); return; }
   if (h === '#/feed') { renderFeed(); return; }

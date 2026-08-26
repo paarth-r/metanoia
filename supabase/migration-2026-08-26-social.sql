@@ -57,3 +57,12 @@ create policy gi_insert on storage.objects for insert
   with check (bucket_id = 'group-images' and auth.role() = 'authenticated');
 create policy gi_update on storage.objects for update
   using (bucket_id = 'group-images' and auth.role() = 'authenticated');
+
+-- invite a friend straight into a group (caller must be a member; target must be an accepted friend)
+create or replace function public.add_friend_to_group(gid uuid, fid uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_group_member(gid, auth.uid()) then raise exception 'not a member of this group'; end if;
+  if not public.are_friends(auth.uid(), fid) then raise exception 'you can only add accepted friends'; end if;
+  insert into group_members (group_id, user_id) values (gid, fid) on conflict do nothing;
+end $$;
