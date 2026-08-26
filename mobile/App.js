@@ -6,7 +6,9 @@ import {
   useColorScheme, ActivityIndicator, Alert, RefreshControl, SafeAreaView,
   StatusBar, Platform, Image, KeyboardAvoidingView,
 } from 'react-native';
+import { Share } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as Clipboard from 'expo-clipboard';
 import {
   useFonts,
   CormorantGaramond_600SemiBold,
@@ -625,6 +627,27 @@ export default function App() {
     queueFlush();
   };
 
+  const addHabit = async (label) => {
+    if (!SP) return false;
+    if (SP.plan.habits.length >= 7) { say('Seven is the cap. Discipline is subtraction.'); return false; }
+    const habits = [...SP.plan.habits, label];
+    const r = await sb.from('plans').update({ habits }).eq('id', SP.plan.id);
+    if (r.error) { say('Could not commit.'); return false; }
+    setSP((prev) => ({ ...prev, plan: { ...prev.plan, habits } }));
+    say('Committed. Thirty days.');
+    return true;
+  };
+  const addTarget = async (label, count) => {
+    if (!SP) return false;
+    if ((SP.plan.targets || []).length >= 8) { say('Eight targets is the cap.'); return false; }
+    const targets = [...(SP.plan.targets || []), [label, count]];
+    const r = await sb.from('plans').update({ targets }).eq('id', SP.plan.id);
+    if (r.error) { say('Could not commit.'); return false; }
+    setSP((prev) => ({ ...prev, plan: { ...prev.plan, targets } }));
+    say('Committed. Thirty days.');
+    return true;
+  };
+
   const createPlan = async (planObj) => {
     const r = await sb.from('plans').insert({
       owner: session.user.id, name: planObj.name, intent: planObj.intent,
@@ -676,7 +699,8 @@ export default function App() {
       <View style={{ flex: 1 }}>
         {tab === 'ledger' ? (
           <LedgerScreen c={c} SP={SP} toggleDay={toggleDay} toggleWeek={toggleWeek}
-            sel={sel} setSel={setSel} onCreate={() => setWizard(true)} onAdopt={createPlan} profile={profile} />
+            sel={sel} setSel={setSel} onCreate={() => setWizard(true)} onAdopt={createPlan} profile={profile}
+            onAddHabit={addHabit} onAddTarget={addTarget} />
         ) : null}
         {tab === 'feed' ? (
           <FeedScreen c={c} me={session.user.id} onOpenUser={setViewUser}
@@ -726,7 +750,28 @@ export default function App() {
 
 /* ---------- ledger screen ---------- */
 
-function LedgerScreen({ c, SP, toggleDay, toggleWeek, sel, setSel, onCreate, onAdopt, profile }) {
+function LedgerScreen({ c, SP, toggleDay, toggleWeek, sel, setSel, onCreate, onAdopt, profile, onAddHabit, onAddTarget }) {
+  const [commitKind, setCommitKind] = useState(null);
+  const [newLabel, setNewLabel] = useState('');
+  const [newCount, setNewCount] = useState('2');
+  const WARNING = 'Be careful: once you commit to something, you will see it for the next 30 days and cannot remove it.';
+  const confirmCommit = () => {
+    const label = newLabel.trim();
+    if (!label) return;
+    const isHabit = commitKind === 'habit';
+    const n = Math.max(1, Math.min(7, parseInt(newCount, 10) || 1));
+    Alert.alert(
+      'Commit for thirty days?',
+      WARNING + '\n\n' + (isHabit ? '"' + label + '" joins your daily non-negotiables.' : '"' + label + ' x' + n + '" joins your weekly targets.'),
+      [
+        { text: 'Not yet', style: 'cancel' },
+        { text: 'Commit', style: 'destructive', onPress: async () => {
+          const done = isHabit ? await onAddHabit(label) : await onAddTarget(label, n);
+          if (done) { setCommitKind(null); setNewLabel(''); setNewCount('2'); }
+        } },
+      ]
+    );
+  };
   if (!SP) {
     return (
       <ScrollView contentContainerStyle={{ padding: 18, paddingTop: 30 }}>
@@ -757,6 +802,31 @@ function LedgerScreen({ c, SP, toggleDay, toggleWeek, sel, setSel, onCreate, onA
         getDay={(d) => SP.days[d]} getWeek={(w) => SP.weeks[w]}
         onToggleDay={toggleDay} onToggleWeek={toggleWeek}
         readOnly={false} sel={sel} setSel={setSel} />
+      <Card c={c}>
+        <H2 c={c}>Commit more</H2>
+        <Hint c={c}>{WARNING}</Hint>
+        {commitKind === null ? (
+          <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+            <Btn c={c} small ghost label="New non-negotiable" onPress={() => setCommitKind('habit')} />
+            <Btn c={c} small ghost label="New weekly target" onPress={() => setCommitKind('target')} />
+          </View>
+        ) : (
+          <View>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Input c={c} placeholder={commitKind === 'habit' ? 'The daily action' : 'The weekly target'}
+                value={newLabel} onChangeText={setNewLabel} maxLength={40} style={{ flex: 1 }} />
+              {commitKind === 'target' ? (
+                <Input c={c} placeholder="2" value={newCount} onChangeText={setNewCount}
+                  keyboardType="number-pad" maxLength={1} style={{ width: 54 }} />
+              ) : null}
+            </View>
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+              <Btn c={c} small label="Commit" onPress={confirmCommit} />
+              <Btn c={c} small ghost label="Cancel" onPress={() => { setCommitKind(null); setNewLabel(''); }} />
+            </View>
+          </View>
+        )}
+      </Card>
       <Text style={{ fontFamily: MONO, fontSize: 11, color: c.muted, lineHeight: 19, marginTop: 6 }}>
         Never miss twice. Done before dopamine. The scorecard is the verdict on the day, not your feelings.
       </Text>
@@ -1061,6 +1131,34 @@ function GroupScreen({ c, me, group, onOpenUser, say, onBack }) {
 
   const members = g.group_members || [];
   const sections = [['chat', 'Chat'], ['members', 'Members'], ['settings', 'Settings']];
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [friendOpts, setFriendOpts] = useState(null);
+
+  const refreshGroup = async () => {
+    const r = await sb.from('groups').select('*, group_members(user_id, profiles(username, display_name))').eq('id', g.id).maybeSingle();
+    if (r.data) setG(r.data);
+  };
+  const loadFriendOpts = async () => {
+    const r = await sb.from('friendships').select(
+      '*, a:profiles!friendships_user_a_fkey(id, username, display_name), b:profiles!friendships_user_b_fkey(id, username, display_name)')
+      .eq('status', 'accepted');
+    const list = (r.data || [])
+      .map((row) => (row.a && row.a.id === me ? row.b : row.a))
+      .filter(Boolean)
+      .filter((p) => !members.some((m) => m.user_id === p.id));
+    setFriendOpts(list);
+  };
+  const shareCode = () => {
+    Share.share({
+      message: 'Join "' + g.name + '" on Metanoia. Invite code: ' + g.invite_code +
+        '  https://paarth-r.github.io/metanoia/#/join/' + g.invite_code,
+    });
+  };
+  const addFriendToGroup = async (fid) => {
+    const r = await sb.rpc('add_friend_to_group', { gid: g.id, fid });
+    if (r.error) say('Could not add them.');
+    else { say('Added to the group.'); await refreshGroup(); loadFriendOpts(); }
+  };
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }} keyboardVerticalOffset={60}>
@@ -1069,8 +1167,10 @@ function GroupScreen({ c, me, group, onOpenUser, say, onBack }) {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 }}>
           <GroupAvatar c={c} group={g} size={52} />
           <View style={{ flex: 1 }}>
-            <Text style={{ fontFamily: SERIF, fontSize: 28, color: c.ink }}>{g.name}</Text>
-            <Text style={{ fontFamily: MONO, fontSize: 11, color: c.muted }}>{members.length} member{members.length === 1 ? '' : 's'}</Text>
+            <Pressable onPress={async () => { await Clipboard.setStringAsync(g.name); say('Group name copied.'); }}>
+              <Text style={{ fontFamily: SERIF, fontSize: 28, color: c.ink }}>{g.name}</Text>
+            </Pressable>
+            <Text style={{ fontFamily: MONO, fontSize: 11, color: c.muted }}>{members.length} member{members.length === 1 ? '' : 's'} - tap name to copy</Text>
           </View>
         </View>
         <View style={{ flexDirection: 'row', gap: 4, padding: 4, borderRadius: 24, backgroundColor: c.card, borderWidth: 1, borderColor: c.line, marginBottom: 14 }}>
@@ -1127,6 +1227,29 @@ function GroupScreen({ c, me, group, onOpenUser, say, onBack }) {
 
         {section === 'members' ? (
           <ScrollView>
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+              <Btn c={c} small label={inviteOpen ? 'Close invite' : 'Invite'} onPress={() => {
+                const next = !inviteOpen;
+                setInviteOpen(next);
+                if (next) loadFriendOpts();
+              }} />
+              <Btn c={c} small ghost label="Share code" onPress={shareCode} />
+            </View>
+            {inviteOpen ? (
+              <Card c={c}>
+                <H2 c={c}>Add a friend</H2>
+                {friendOpts === null ? <ActivityIndicator color={c.ink} /> : null}
+                {friendOpts && !friendOpts.length ? (
+                  <Hint c={c} style={{ marginBottom: 0 }}>All of your friends are already here, or you have none yet. Share the code instead.</Hint>
+                ) : null}
+                {(friendOpts || []).map((p, pi) => (
+                  <View key={pi} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 9, borderBottomWidth: 1, borderColor: c.lineSoft, gap: 10 }}>
+                    <Text style={{ fontFamily: MONO_M, fontSize: 14, color: c.ink, flex: 1 }}>{p.display_name || p.username}</Text>
+                    <Btn c={c} small label="Add" onPress={() => addFriendToGroup(p.id)} />
+                  </View>
+                ))}
+              </Card>
+            ) : null}
             <Card c={c}>
               {members.map((m, mi) => (
                 <Pressable key={mi} onPress={() => m.profiles?.username && onOpenUser(m.profiles.username)}
@@ -1163,8 +1286,11 @@ function GroupScreen({ c, me, group, onOpenUser, say, onBack }) {
             </Card>
             <Card c={c}>
               <H2 c={c}>Invite code</H2>
-              <Text selectable style={{ fontFamily: SERIF, fontSize: 30, letterSpacing: 3, color: c.ink }}>{g.invite_code}</Text>
-              <Hint c={c} style={{ marginTop: 6, marginBottom: 0 }}>Anyone with this code can join from the Social page.</Hint>
+              <Pressable onPress={async () => { await Clipboard.setStringAsync(g.invite_code); say('Invite code copied.'); }}>
+                <Text style={{ fontFamily: SERIF, fontSize: 30, letterSpacing: 3, color: c.ink }}>{g.invite_code}</Text>
+              </Pressable>
+              <Hint c={c} style={{ marginTop: 6 }}>Tap to copy. Anyone with this code can join from the Social page.</Hint>
+              <Btn c={c} small ghost label="Share code" onPress={shareCode} />
             </Card>
             <Card c={c}>
               <Btn c={c} label="Leave group" ghost onPress={() => {
