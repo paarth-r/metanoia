@@ -197,6 +197,8 @@ var TARGET_SUGGESTIONS = [
   ['Practice a skill', 2]
 ];
 
+var ACCOUNTS = { paarth: '#/paarth' };
+
 var PAARTH_PLAN = {
   name: "Paarth's Reset",
   intent: 'Dopamine detox. Immaculate grades. Money, golf, iron discipline.',
@@ -338,12 +340,34 @@ function renderLanding() {
   var b1 = el('a', 'btn', plan ? 'Open my ledger' : 'Start your 30 days');
   b1.href = plan ? '#/track' : '#/new';
   br.appendChild(b1);
-  if (!plan || plan.name !== PAARTH_PLAN.name) {
-    var b2 = el('a', 'btn ghost', "See Paarth's reset");
-    b2.href = '#/paarth';
-    br.appendChild(b2);
-  }
+  var b2 = el('button', 'btn ghost', 'Load account');
+  b2.type = 'button';
+  br.appendChild(b2);
   wrap.appendChild(br);
+
+  var acct = el('div', 'io');
+  var ar = el('div', 'addrow'); ar.style.marginTop = '14px';
+  var nameIn = el('input');
+  nameIn.type = 'text'; nameIn.placeholder = 'Account name'; nameIn.maxLength = 30;
+  nameIn.setAttribute('autocapitalize', 'none');
+  var goB = el('button', 'btn', 'Open'); goB.type = 'button';
+  ar.appendChild(nameIn); ar.appendChild(goB);
+  acct.appendChild(ar);
+  var acctErr = el('div', 'err');
+  acct.appendChild(acctErr);
+  wrap.appendChild(acct);
+  b2.addEventListener('click', function () {
+    acct.classList.toggle('open');
+    if (acct.classList.contains('open')) nameIn.focus();
+  });
+  function openAccount() {
+    var v = nameIn.value.trim().toLowerCase();
+    if (!v) return;
+    if (ACCOUNTS[v]) { location.hash = ACCOUNTS[v]; return; }
+    acctErr.textContent = 'No account named "' + v + '" in this ledger.';
+  }
+  goB.addEventListener('click', openAccount);
+  nameIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); openAccount(); } });
 
   var q = QUOTES[new Date().getDate() % QUOTES.length];
   wrap.appendChild(el('div', 'quote', '"' + q[0] + '"'));

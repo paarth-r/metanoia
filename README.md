@@ -9,7 +9,7 @@ Live at https://paarth-r.github.io/metanoia/
 - Guided walkthrough: name your reset, pick a start date, choose 3-7 daily non-negotiables (suggestions plus custom), and optional weekly targets with per-week counts.
 - 30-day ledger: a daily scorecard of big tappable checkboxes, weekly target pips, streak / perfect-day / average stats, and a 30-cell grid where perfect days fill solid and zero days past show red.
 - A rotating daily quote from Marcus Aurelius, Seneca, and Epictetus.
-- The original plan (Paarth's reset, Aug 25 - Sep 23, 2026) ships built in: one click to adopt it, or build your own.
+- Load account: type an account name on the landing page to open a built-in plan. The original ("paarth", Aug 25 - Sep 23, 2026) ships with the site; adopt it with one click or build your own.
 
 ## How data works
 
