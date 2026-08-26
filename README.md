@@ -13,7 +13,11 @@ Live at https://paarth-r.github.io/metanoia/
 
 ## How data works
 
-There is no backend. Your plan and every tick live in your browser's localStorage; nothing is uploaded and there are no accounts. Export produces a JSON blob you can paste into Import on another device. "Start over" erases the plan and all ticks from the browser.
+Visitors' plans and ticks live in their browser's localStorage; nothing is uploaded and there are no accounts. Export produces a JSON blob you can paste into Import on another device. "Start over" erases the plan and all ticks from the browser.
+
+## Working in public
+
+The built-in account publishes its progress. The backend is GitHub itself: ticks are written to `data/paarth.json` in this repo through the GitHub Contents API (each tick lands as a commit), and the public account page reads that file and renders a live, read-only ledger with streaks, today's open items, and the 30-day grid. Anyone can watch; only the holder of a fine-grained GitHub token (repo-scoped, Contents read/write, pasted once on the tracker page and kept in localStorage) can write. No servers, no cost.
 
 ## Rules of the house
 

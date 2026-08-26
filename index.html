@@ -199,6 +199,72 @@ var TARGET_SUGGESTIONS = [
 
 var ACCOUNTS = { paarth: '#/paarth' };
 
+/* Public progress lives as a JSON file in the site's own GitHub repo.
+   Reads are public; writes go through the GitHub API with a token only
+   the owner holds (pasted on the tracker page, kept in localStorage). */
+var REMOTE = { owner: 'paarth-r', repo: 'metanoia', path: 'data/paarth.json', branch: 'main' };
+var TOKEN_KEY = 'metanoia_gh_token_v1';
+function ghToken() { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; } }
+function setGhToken(v) { try { v ? localStorage.setItem(TOKEN_KEY, v) : localStorage.removeItem(TOKEN_KEY); } catch (e) {} }
+
+var syncMsg = '';
+function setSync(m) {
+  syncMsg = m;
+  var n = document.getElementById('syncline');
+  if (n) n.textContent = m;
+}
+
+async function fetchRemote() {
+  var api = 'https://api.github.com/repos/' + REMOTE.owner + '/' + REMOTE.repo +
+    '/contents/' + REMOTE.path + '?ref=' + REMOTE.branch;
+  try {
+    var r = await fetch(api, { headers: { Accept: 'application/vnd.github.raw' } });
+    if (r.ok) return await r.json();
+  } catch (e) {}
+  try {
+    var r2 = await fetch('https://raw.githubusercontent.com/' + REMOTE.owner + '/' + REMOTE.repo +
+      '/' + REMOTE.branch + '/' + REMOTE.path + '?t=' + Date.now());
+    if (r2.ok) return await r2.json();
+  } catch (e) {}
+  return null;
+}
+
+var pushTimer = null;
+function schedulePush() {
+  if (!ghToken()) return;
+  if (pushTimer) clearTimeout(pushTimer);
+  pushTimer = setTimeout(pushRemote, 4000);
+  setSync('Publishing soon...');
+}
+async function pushRemote() {
+  var tok = ghToken();
+  if (!tok) return;
+  setSync('Publishing...');
+  var api = 'https://api.github.com/repos/' + REMOTE.owner + '/' + REMOTE.repo + '/contents/' + REMOTE.path;
+  var head = { Authorization: 'Bearer ' + tok, Accept: 'application/vnd.github+json' };
+  try {
+    var sha = null;
+    var g = await fetch(api + '?ref=' + REMOTE.branch, { headers: head });
+    if (g.status === 200) sha = (await g.json()).sha;
+    var d = Math.max(1, Math.min(TOTAL, todayNum()));
+    var payload = { plan: 'paarth', updated: new Date().toISOString(), days: state.days, weeks: state.weeks };
+    var body = {
+      message: 'tick: day ' + d + ' ' + score(d) + '/' + nHabits(),
+      content: btoa(unescape(encodeURIComponent(JSON.stringify(payload, null, 1)))),
+      branch: REMOTE.branch
+    };
+    if (sha) body.sha = sha;
+    var r = await fetch(api, { method: 'PUT', headers: head, body: JSON.stringify(body) });
+    if (r.ok) setSync('Public ledger updated ' + new Date().toLocaleTimeString());
+    else if (r.status === 401 || r.status === 403) setSync('Token rejected. Reconnect under Your data.');
+    else if (r.status === 409 || r.status === 422) {
+      setSync('Conflict, retrying...');
+      if (pushTimer) clearTimeout(pushTimer);
+      pushTimer = setTimeout(pushRemote, 3000);
+    } else setSync('Publish failed (' + r.status + ')');
+  } catch (e) { setSync('Publish failed. Offline?'); }
+}
+
 var PAARTH_PLAN = {
   name: "Paarth's Reset",
   intent: 'Dopamine detox. Immaculate grades. Money, golf, iron discipline.',
@@ -604,7 +670,7 @@ function renderTracker() {
       b.addEventListener('click', function () {
         if (!editable) return;
         arr[h2] = !arr[h2];
-        persist(); renderTracker();
+        persist(); schedulePush(); renderTracker();
       });
       card.appendChild(b);
     })(h);
@@ -646,7 +712,7 @@ function renderTracker() {
           pip.addEventListener('click', function () {
             if (!wEditable) return;
             wo[t2][p2] = !wo[t2][p2];
-            persist(); renderTracker();
+            persist(); schedulePush(); renderTracker();
           });
           box.appendChild(pip);
         })(t, p);
@@ -732,6 +798,49 @@ function renderTracker() {
   });
   wrap.appendChild(io);
 
+  /* public ledger connection (owner only: requires a GitHub token) */
+  var pub = el('div', 'card');
+  pub.appendChild(el('h2', null, 'Public ledger'));
+  if (ghToken()) {
+    pub.appendChild(el('div', 'hint',
+      'Connected. Every tick publishes to the public account page as a commit by ' + REMOTE.owner + '.'));
+    pub.appendChild(el('div', 'count', syncMsg || 'Waiting for the next tick.')).id = 'syncline';
+    var br2 = el('div', 'btnrow');
+    var pushNow = el('button', 'btn ghost', 'Publish now'); pushNow.type = 'button';
+    pushNow.addEventListener('click', function () { pushRemote(); });
+    var pull = el('button', 'btn ghost', 'Pull from public'); pull.type = 'button';
+    pull.addEventListener('click', function () {
+      setSync('Pulling...');
+      fetchRemote().then(function (rm) {
+        if (!rm || !rm.days) { setSync('Nothing published yet.'); return; }
+        state = { days: rm.days, weeks: rm.weeks || {} };
+        persist(); setSync('Pulled the public ledger.'); renderTracker();
+      });
+    });
+    var disc = el('button', 'btn ghost', 'Disconnect'); disc.type = 'button';
+    disc.addEventListener('click', function () { setGhToken(''); renderTracker(); });
+    br2.appendChild(pushNow); br2.appendChild(pull); br2.appendChild(disc);
+    pub.appendChild(br2);
+  } else {
+    pub.appendChild(el('div', 'hint',
+      'Owner only. Paste a GitHub fine-grained token (repo: ' + REMOTE.owner + '/' + REMOTE.repo +
+      ', permission: Contents read and write). It stays in this browser; ticks then publish to the public account page. Anyone can watch; only the token holder can write.'));
+    var ar3 = el('div', 'addrow');
+    var tok = el('input'); tok.type = 'password'; tok.placeholder = 'github_pat_...';
+    tok.setAttribute('autocomplete', 'off');
+    var conn = el('button', 'btn', 'Connect'); conn.type = 'button';
+    conn.addEventListener('click', function () {
+      var v = tok.value.trim();
+      if (!v) return;
+      setGhToken(v);
+      renderTracker();
+      pushRemote();
+    });
+    ar3.appendChild(tok); ar3.appendChild(conn);
+    pub.appendChild(ar3);
+  }
+  wrap.appendChild(pub);
+
   var foot = el('div', 'foot');
   foot.textContent = tn > TOTAL
     ? 'The thirty days are over. Decide what continues. Metanoia is not the month; it is what the month proved.'
@@ -745,11 +854,92 @@ function renderTracker() {
 function renderPaarth() {
   var root = clear();
   var wrap = el('div', 'wrap');
-  wrap.appendChild(el('div', 'eyebrow', 'The original - Aug 25 to Sep 23, 2026'));
+  wrap.appendChild(el('div', 'eyebrow', 'The original - Aug 25 to Sep 23, 2026 - live in public'));
   wrap.appendChild(el('h1', null, PAARTH_PLAN.name));
   wrap.appendChild(el('div', 'sub', PAARTH_PLAN.intent));
 
-  var card = el('div', 'card'); card.style.marginTop = '24px';
+  /* live public ledger, read-only, fetched from the repo */
+  var live = el('div', 'card'); live.style.marginTop = '24px';
+  live.appendChild(el('h2', null, 'The ledger, live'));
+  var loading = el('div', 'hint', 'Reading the public ledger...');
+  live.appendChild(loading);
+  wrap.appendChild(live);
+
+  fetchRemote().then(function (rm) {
+    loading.remove();
+    var pStart = parseISO(PAARTH_PLAN.startISO);
+    var n = new Date();
+    var t0 = new Date(n.getFullYear(), n.getMonth(), n.getDate());
+    var ptn = Math.round((t0 - pStart) / 864e5) + 1;
+    var nH = PAARTH_PLAN.habits.length;
+    var days = (rm && rm.days) || {};
+    function pScore(d) {
+      var a = days[d]; if (!a) return 0;
+      var c = 0; for (var i = 0; i < a.length && i < nH; i++) if (a[i]) c++;
+      return c;
+    }
+    var upto = Math.min(Math.max(ptn, 0), TOTAL);
+    var sum = 0, perfect = 0;
+    for (var d = 1; d <= upto; d++) { var sc = pScore(d); sum += sc; if (sc === nH) perfect++; }
+    var streak = 0, sd = upto;
+    if (upto >= 1 && pScore(upto) < nH) sd = upto - 1;
+    for (var d2 = sd; d2 >= 1; d2--) { if (pScore(d2) === nH) streak++; else break; }
+
+    var row = el('div', 'statrow'); row.style.marginTop = '0';
+    var pairs = ptn < 1
+      ? [['-', 'not started'], ['-', 'streak'], ['-', 'perfect']]
+      : ptn > TOTAL
+        ? [['Done', 'thirty days'], [String(perfect), 'perfect days'], [(sum / TOTAL).toFixed(1), 'avg score']]
+        : [['Day ' + ptn, 'of 30'], [String(streak), 'streak'], [upto ? (sum / upto).toFixed(1) : '-', 'avg /' + nH]];
+    for (var i2 = 0; i2 < pairs.length; i2++) {
+      var stEl = el('div', 'stat');
+      stEl.appendChild(el('b', null, pairs[i2][0]));
+      stEl.appendChild(el('span', null, pairs[i2][1]));
+      row.appendChild(stEl);
+    }
+    live.appendChild(row);
+
+    if (ptn >= 1 && ptn <= TOTAL) {
+      var todayLine = el('div', 'wmeta'); todayLine.style.margin = '12px 0 4px';
+      var tScore = pScore(ptn);
+      todayLine.appendChild(document.createTextNode('Today: '));
+      todayLine.appendChild(el('em', null, tScore + ' / ' + nH));
+      var missing = [];
+      var ta = days[ptn] || [];
+      for (var h = 0; h < nH; h++) if (!ta[h]) missing.push(PAARTH_PLAN.habits[h]);
+      if (missing.length && missing.length < nH)
+        todayLine.appendChild(document.createTextNode('  -  still open: ' + missing.join(', ')));
+      if (missing.length === nH)
+        todayLine.appendChild(document.createTextNode('  -  nothing ticked yet today'));
+      live.appendChild(todayLine);
+    }
+
+    var grid = el('div', 'grid'); grid.style.marginTop = '12px';
+    for (var g = 1; g <= TOTAL; g++) {
+      var scG = pScore(g);
+      var cls = 'cell';
+      if (g > ptn) cls += ' future';
+      if (scG === nH) cls += ' perfect';
+      if (g < ptn && scG === 0) cls += ' zero-past';
+      var c = el('div', cls); c.style.cursor = 'default';
+      c.appendChild(el('span', 'n', String(g)));
+      var bar = el('span', 'bar');
+      var fill = el('i');
+      fill.style.width = Math.round(scG / nH * 100) + '%';
+      bar.appendChild(fill);
+      c.appendChild(bar);
+      grid.appendChild(c);
+    }
+    live.appendChild(grid);
+    var upd = el('div', 'count');
+    upd.style.marginTop = '10px';
+    upd.textContent = rm && rm.updated
+      ? 'Last published ' + new Date(rm.updated).toLocaleString()
+      : 'Nothing published yet. The ledger fills in as days are ticked.';
+    live.appendChild(upd);
+  });
+
+  var card = el('div', 'card');
   card.appendChild(el('h2', null, 'Daily non-negotiables'));
   for (var i = 0; i < PAARTH_PLAN.habits.length; i++) {
     var b = el('div', 'habit');
