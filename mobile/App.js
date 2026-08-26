@@ -241,27 +241,35 @@ function Ledger({ c, plan, getDay, getWeek, onToggleDay, onToggleWeek, readOnly,
 
 function AuthScreen({ c }) {
   const [email, setEmail] = useState('');
-  const [code, setCode] = useState('');
-  const [stage, setStage] = useState('email');
+  const [password, setPassword] = useState('');
+  const [mode, setMode] = useState('signin'); // signin | signup | forgot
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
+  const SITE = 'https://paarth-r.github.io/metanoia/';
 
-  const sendCode = async () => {
+  const go = async () => {
     const v = email.trim();
     if (!v) return;
-    setBusy(true); setMsg('Sending...');
-    const r = await sb.auth.signInWithOtp({ email: v, options: { shouldCreateUser: true } });
+    setBusy(true);
+    if (mode === 'signin') {
+      setMsg('Signing in...');
+      const r = await sb.auth.signInWithPassword({ email: v, password });
+      if (r.error) setMsg(/confirm/i.test(r.error.message)
+        ? 'Email not confirmed yet. Click the link in your confirmation email first.'
+        : `Could not sign in: ${r.error.message}`);
+    } else if (mode === 'signup') {
+      if (password.length < 8) { setMsg('Password needs 8+ characters.'); setBusy(false); return; }
+      setMsg('Creating...');
+      const r = await sb.auth.signUp({ email: v, password, options: { emailRedirectTo: SITE } });
+      setMsg(r.error ? `Could not create: ${r.error.message}`
+        : 'Account created. Tap the link in your confirmation email, then sign in here.');
+    } else {
+      setMsg('Sending...');
+      const r = await sb.auth.resetPasswordForEmail(v, { redirectTo: SITE });
+      setMsg(r.error ? `Could not send: ${r.error.message}`
+        : 'Sent. The reset link opens the website to set a new password; then sign in here.');
+    }
     setBusy(false);
-    if (r.error) setMsg(`Could not send: ${r.error.message}`);
-    else { setStage('code'); setMsg('Check your email for a 6-digit code (or use the magic link on this phone).'); }
-  };
-  const verify = async () => {
-    const t = code.trim();
-    if (!t) return;
-    setBusy(true); setMsg('Verifying...');
-    const r = await sb.auth.verifyOtp({ email: email.trim(), token: t, type: 'email' });
-    setBusy(false);
-    if (r.error) setMsg(`Could not verify: ${r.error.message}`);
   };
 
   return (
@@ -272,21 +280,30 @@ function AuthScreen({ c }) {
         noun. A transformative change of heart and mind; the moment you turn your life around.
       </Text>
       <Card c={c}>
-        {stage === 'email' ? (
-          <>
-            <H2 c={c}>Sign in</H2>
-            <Hint c={c}>No password. Enter your email; we send a 6-digit code.</Hint>
-            <Input c={c} placeholder="you@example.com" autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} />
-            <Btn c={c} label={busy ? 'Sending...' : 'Send code'} onPress={sendCode} disabled={busy} style={{ marginTop: 10 }} />
-          </>
-        ) : (
-          <>
-            <H2 c={c}>Enter the code</H2>
-            <Input c={c} placeholder="123456" keyboardType="number-pad" value={code} onChangeText={setCode} maxLength={6} />
-            <Btn c={c} label={busy ? 'Verifying...' : 'Verify'} onPress={verify} disabled={busy} style={{ marginTop: 10 }} />
-            <Btn c={c} label="Different email" ghost small onPress={() => { setStage('email'); setMsg(''); }} style={{ marginTop: 8 }} />
-          </>
-        )}
+        <H2 c={c}>{mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Reset password' : 'Sign in'}</H2>
+        <Hint c={c}>
+          {mode === 'signup'
+            ? 'One confirmation email, then you sign in with your password.'
+            : mode === 'forgot'
+              ? 'We email a reset link; it opens the website to set a new password.'
+              : 'Email and password.'}
+        </Hint>
+        <Input c={c} placeholder="you@example.com" autoCapitalize="none" keyboardType="email-address"
+          autoComplete="email" value={email} onChangeText={setEmail} />
+        {mode !== 'forgot' ? (
+          <Input c={c} placeholder={mode === 'signup' ? 'Password (8+ characters)' : 'Password'}
+            secureTextEntry autoCapitalize="none"
+            autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+            value={password} onChangeText={setPassword} style={{ marginTop: 8 }} />
+        ) : null}
+        <Btn c={c}
+          label={busy ? '...' : mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Sign in'}
+          onPress={go} disabled={busy} style={{ marginTop: 10 }} />
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+          {mode !== 'signin' ? <Btn c={c} label="Sign in instead" ghost small onPress={() => { setMode('signin'); setMsg(''); }} /> : null}
+          {mode !== 'signup' ? <Btn c={c} label="Create account" ghost small onPress={() => { setMode('signup'); setMsg(''); }} /> : null}
+          {mode === 'signin' ? <Btn c={c} label="Forgot password" ghost small onPress={() => { setMode('forgot'); setMsg(''); }} /> : null}
+        </View>
         {msg ? <Hint c={c} style={{ marginTop: 10, marginBottom: 0 }}>{msg}</Hint> : null}
       </Card>
       {[['Choose your non-negotiables.', 'Three to seven things you will do every single day. Not goals. Actions.'],
@@ -1041,6 +1058,7 @@ function AccountScreen({ c, profile, SP, setSP, onProfileSaved, say }) {
   const [username, setUsername] = useState(profile?.username || '');
   const [display, setDisplay] = useState(profile?.display_name || '');
   const [token, setToken] = useState('');
+  const [newPw, setNewPw] = useState('');
 
   return (
     <ScrollView contentContainerStyle={{ padding: 18, paddingTop: 24, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
@@ -1093,6 +1111,19 @@ function AccountScreen({ c, profile, SP, setSP, onProfileSaved, say }) {
           }} />
         </Card>
       ) : null}
+
+      <Card c={c}>
+        <H2 c={c}>Password</H2>
+        <Hint c={c}>Set or change the password you sign in with, here and on the website.</Hint>
+        <Input c={c} placeholder="New password (8+ characters)" secureTextEntry autoCapitalize="none"
+          autoComplete="new-password" value={newPw} onChangeText={setNewPw} />
+        <Btn c={c} label="Save password" ghost style={{ marginTop: 10 }} onPress={async () => {
+          if (newPw.length < 8) { say('Password needs 8+ characters.'); return; }
+          const r = await sb.auth.updateUser({ password: newPw });
+          say(r.error ? 'Failed to save password.' : 'Password saved.');
+          if (!r.error) setNewPw('');
+        }} />
+      </Card>
 
       <Card c={c}>
         <H2 c={c}>API access</H2>
