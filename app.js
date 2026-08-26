@@ -394,7 +394,7 @@ function renderNav() {
   brand.href = '#/';
   nav.appendChild(brand);
   var links = signedIn()
-    ? [['#/track', 'Ledger'], ['#/feed', 'Feed'], ['#/people', 'People'], ['#/settings', 'Account']]
+    ? [['#/track', 'Ledger'], ['#/feed', 'Feed'], ['#/people', 'Social'], ['#/settings', 'Account']]
     : (backendReady() ? [['#/auth', 'Sign in']] : []);
   var cur = location.hash || '#/';
   links.forEach(function (l) {
@@ -1009,8 +1009,8 @@ async function renderFeed() {
 async function renderPeople() {
   var root = clear();
   var wrap = el('div', 'wrap');
-  wrap.appendChild(el('div', 'eyebrow', 'Friends and groups'));
-  wrap.appendChild(el('h1', null, 'People'));
+  wrap.appendChild(el('div', 'eyebrow', 'Groups and friends'));
+  wrap.appendChild(el('h1', null, 'Social'));
   if (!signedIn()) {
     var c0 = el('div', 'card');
     c0.appendChild(el('div', 'hint', 'Sign in to add friends and form groups.'));
@@ -1165,7 +1165,7 @@ async function renderPeople() {
     });
     jnRow.appendChild(jc); jnRow.appendChild(jn);
     gc.appendChild(jnRow);
-    lists.appendChild(gc);
+    lists.insertBefore(gc, lists.firstChild);
   }
   loadLists();
 }
