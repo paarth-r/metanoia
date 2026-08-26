@@ -14,7 +14,10 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.paarthr.metanoia"
+      "bundleIdentifier": "com.paarthr.metanoia",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.paarthr.metanoia",
@@ -29,7 +32,13 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-font"
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Metanoia uses your photo library so you can set group images."
+        }
+      ]
     ]
   }
 }
