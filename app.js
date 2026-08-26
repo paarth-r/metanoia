@@ -1340,6 +1340,12 @@ function route() {
   renderLanding();
 }
 
+if ('serviceWorker' in navigator) {
+  addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').catch(function () {});
+  });
+}
+
 async function boot() {
   if (sb) {
     var s = await sb.auth.getSession();

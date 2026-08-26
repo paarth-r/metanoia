@@ -53,7 +53,14 @@ token to their own tools or Claude to manage goals programmatically.
 2. Done before dopamine.
 3. The scorecard is the verdict on the day, not your feelings.
 
+## Mobile
+
+The site is an installable PWA: manifest, icons, and a network-first service
+worker (offline-capable shell, API traffic never cached). On iPhone: open in
+Safari -> Share -> Add to Home Screen. On Android: Chrome offers Install.
+
 ## Roadmap
 
-- Web push notifications for feed events (currently in-app feed + badge).
-- Native mobile app wrapping the same API.
+- Web push notifications for feed events (Supabase edge function + VAPID;
+  on iOS push requires the installed PWA).
+- Native app (Expo) wrapping the same API, if App Store distribution is wanted.
