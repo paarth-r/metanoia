@@ -9,6 +9,7 @@ import {
 import { Share } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   useFonts,
   CormorantGaramond_600SemiBold,
@@ -837,8 +838,18 @@ function LedgerScreen({ c, SP, toggleDay, toggleWeek, sel, setSel, onCreate, onA
 /* ---------- feed ---------- */
 
 const REACTION_KINDS = [['respect', 'Respect'], ['locked_in', 'Locked in'], ['soft', 'Soft']];
+const MUTED_KEY = 'metanoia_muted_groups_v1';
 
-function FeedScreen({ c, me, onOpenUser, onSeen }) {
+async function getMutedGroups() {
+  try { return JSON.parse(await AsyncStorage.getItem(MUTED_KEY)) || []; } catch (e) { return []; }
+}
+async function setMutedGroups(ids) {
+  try { await AsyncStorage.setItem(MUTED_KEY, JSON.stringify(ids)); } catch (e) {}
+}
+
+/* Reusable feed: fetches visible events, applies an optional user filter,
+   renders items with reactions. Used by the main Feed and by group feeds. */
+function FeedList({ c, me, onOpenUser, userFilter, hideUsers, header, emptyText }) {
   const [events, setEvents] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [reactions, setReactions] = useState({});
@@ -872,7 +883,7 @@ function FeedScreen({ c, me, onOpenUser, onSeen }) {
   const load = useCallback(async () => {
     const r = await sb.from('feed_events')
       .select('*, profiles(username, display_name), plans(name)')
-      .order('created_at', { ascending: false }).limit(120);
+      .order('created_at', { ascending: false }).limit(150);
     const seen = {}, out = [];
     (r.data || []).forEach((ev) => {
       const key = (ev.kind === 'tick' || ev.kind === 'perfect')
@@ -883,12 +894,11 @@ function FeedScreen({ c, me, onOpenUser, onSeen }) {
     });
     setEvents(out);
     loadReactions(out);
-    onSeen();
-  }, [onSeen, loadReactions]);
+  }, [loadReactions]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    const ch = sb.channel('feed-screen')
+    const ch = sb.channel('feed-list-' + Math.floor(Math.random() * 1e9))
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'feed_events' }, () => load())
       .subscribe();
     return () => { sb.removeChannel(ch); };
@@ -902,16 +912,21 @@ function FeedScreen({ c, me, onOpenUser, onSeen }) {
     return `ticked ${ev.payload?.score}/${ev.payload?.total} on day ${ev.day} of "${pname}".`;
   };
 
+  const data = (events || [])
+    .filter((ev) => (userFilter ? userFilter.includes(ev.user_id) : true))
+    .filter((ev) => (hideUsers ? !hideUsers.has(ev.user_id) : true));
+
   return (
     <FlatList
-      data={events || []}
+      data={data}
       keyExtractor={(ev) => String(ev.id)}
       contentContainerStyle={{ padding: 18, paddingTop: 24, paddingBottom: 40 }}
-      refreshControl={<RefreshControl refreshing={refreshing} tintColor={c.muted} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}
-      ListHeaderComponent={<PageHeader c={c} eyebrow="The accountability wire" title="Feed" />}
+      refreshControl={<RefreshControl refreshing={refreshing} tintColor={c.muted}
+        onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}
+      ListHeaderComponent={header || null}
       ListEmptyComponent={events === null
         ? <ActivityIndicator color={c.ink} style={{ marginTop: 30 }} />
-        : <Hint c={c}>Quiet in here. Add friends or join a group under People, and their ticks show up as they happen.</Hint>}
+        : <Hint c={c}>{emptyText || 'Quiet in here. Add friends or join a group under Social, and their ticks show up as they happen.'}</Hint>}
       renderItem={({ item: ev }) => {
         const uname = ev.profiles?.username || 'someone';
         const isPerfect = ev.kind === 'perfect';
@@ -968,6 +983,80 @@ function FeedScreen({ c, me, onOpenUser, onSeen }) {
         );
       }}
     />
+  );
+}
+
+function FeedScreen({ c, me, onOpenUser, onSeen }) {
+  const [filter, setFilter] = useState({ kind: 'all' });
+  const [groups, setGroups] = useState([]);
+  const [friendIds, setFriendIds] = useState([]);
+  const [muted, setMuted] = useState([]);
+
+  useEffect(() => {
+    (async () => {
+      const g = await sb.from('groups').select('id, name, group_members(user_id)');
+      setGroups(g.data || []);
+      const f = await sb.from('friendships').select('*').eq('status', 'accepted');
+      setFriendIds((f.data || []).map((r) => (r.user_a === me ? r.user_b : r.user_a)));
+      setMuted(await getMutedGroups());
+      onSeen();
+    })();
+  }, [me, onSeen]);
+
+  let userFilter = null;
+  let hideUsers = null;
+  if (filter.kind === 'friends') {
+    userFilter = [...friendIds, me];
+  } else if (filter.kind === 'group') {
+    const g = groups.find((x) => x.id === filter.id);
+    userFilter = g ? (g.group_members || []).map((m) => m.user_id) : [];
+  } else {
+    const mutedSet = new Set();
+    groups.filter((g) => muted.includes(g.id))
+      .forEach((g) => (g.group_members || []).forEach((m) => mutedSet.add(m.user_id)));
+    groups.filter((g) => !muted.includes(g.id))
+      .forEach((g) => (g.group_members || []).forEach((m) => mutedSet.delete(m.user_id)));
+    friendIds.forEach((id) => mutedSet.delete(id));
+    mutedSet.delete(me);
+    hideUsers = mutedSet;
+  }
+
+  const chips = [
+    { key: 'all', label: 'All', active: filter.kind === 'all', onPress: () => setFilter({ kind: 'all' }) },
+    { key: 'friends', label: 'Friends', active: filter.kind === 'friends', onPress: () => setFilter({ kind: 'friends' }) },
+    ...groups.map((g) => ({
+      key: g.id,
+      label: muted.includes(g.id) ? g.name + ' (silenced)' : g.name,
+      active: filter.kind === 'group' && filter.id === g.id,
+      onPress: () => setFilter({ kind: 'group', id: g.id }),
+    })),
+  ];
+
+  const header = (
+    <View>
+      <PageHeader c={c} eyebrow="The accountability wire" title="Feed" />
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginBottom: 14 }}>
+        {chips.map((ch) => (
+          <Pressable key={ch.key} onPress={ch.onPress}
+            style={{
+              borderWidth: 1.5, borderColor: ch.active ? c.leather : c.line, borderRadius: 16,
+              backgroundColor: ch.active ? c.leather : 'transparent',
+              paddingVertical: 6, paddingHorizontal: 13,
+            }}>
+            <Text style={{
+              fontFamily: MONO_M, fontSize: 11, letterSpacing: 1, textTransform: 'uppercase',
+              color: ch.active ? c.onLeather : c.muted,
+            }}>{ch.label}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
+  );
+
+  return (
+    <FeedList c={c} me={me} onOpenUser={onOpenUser}
+      userFilter={userFilter} hideUsers={hideUsers} header={header}
+      emptyText={filter.kind === 'group' ? 'Nothing from this group yet.' : undefined} />
   );
 }
 
@@ -1071,7 +1160,7 @@ function BackRow({ c, onBack, label }) {
 
 function GroupScreen({ c, me, group, onOpenUser, say, onBack }) {
   const [g, setG] = useState(group);
-  const [section, setSection] = useState('chat');
+  const [section, setSection] = useState('feed');
   const [msgs, setMsgs] = useState(null);
   const [draft, setDraft] = useState('');
   const [chatReady, setChatReady] = useState(true);
@@ -1130,7 +1219,16 @@ function GroupScreen({ c, me, group, onOpenUser, say, onBack }) {
   };
 
   const members = g.group_members || [];
-  const sections = [['chat', 'Chat'], ['members', 'Members'], ['settings', 'Settings']];
+  const sections = [['feed', 'Feed'], ['chat', 'Chat'], ['members', 'Members'], ['settings', 'Settings']];
+  const [gMuted, setGMuted] = useState(false);
+  useEffect(() => { getMutedGroups().then((ids) => setGMuted(ids.includes(g.id))); }, [g.id]);
+  const toggleMute = async () => {
+    const ids = await getMutedGroups();
+    const next = gMuted ? ids.filter((i) => i !== g.id) : [...ids, g.id];
+    await setMutedGroups(next);
+    setGMuted(!gMuted);
+    say(gMuted ? 'This group speaks in your main feed again.' : 'Group silenced in your main feed.');
+  };
   const [inviteOpen, setInviteOpen] = useState(false);
   const [friendOpts, setFriendOpts] = useState(null);
 
@@ -1181,6 +1279,14 @@ function GroupScreen({ c, me, group, onOpenUser, say, onBack }) {
             </Pressable>
           ))}
         </View>
+
+        {section === 'feed' ? (
+          <View style={{ flex: 1, marginHorizontal: -18 }}>
+            <FeedList c={c} me={me} onOpenUser={onOpenUser}
+              userFilter={members.map((m) => m.user_id)}
+              emptyText="Nothing from this group yet. Ticks, perfect days, and new resets from members land here." />
+          </View>
+        ) : null}
 
         {section === 'chat' ? (
           <View style={{ flex: 1 }}>
@@ -1291,6 +1397,11 @@ function GroupScreen({ c, me, group, onOpenUser, say, onBack }) {
               </Pressable>
               <Hint c={c} style={{ marginTop: 6 }}>Tap to copy. Anyone with this code can join from the Social page.</Hint>
               <Btn c={c} small ghost label="Share code" onPress={shareCode} />
+            </Card>
+            <Card c={c}>
+              <H2 c={c}>This group in your main feed</H2>
+              <Hint c={c}>Silencing removes these members from your main feed unless they are your friends or share another group with you. The group's own Feed tab stays.</Hint>
+              <Btn c={c} small ghost label={gMuted ? 'Allow in main feed' : 'Silence in main feed'} onPress={toggleMute} />
             </Card>
             <Card c={c}>
               <Btn c={c} label="Leave group" ghost onPress={() => {
