@@ -1,3 +1,4 @@
+-- APPLIED 2026-08-26 (with the is_group_member recursion fix from schema.sql).
 -- Migration 2026-08-26: group chat, group images, feed reactions.
 -- Run in the Supabase SQL editor. Idempotent-ish: safe on a fresh project
 -- after schema.sql; on re-run, drop the objects first.
@@ -25,12 +26,9 @@ alter table public.group_messages enable row level security;
 alter table public.feed_reactions enable row level security;
 
 create policy gm_select on public.group_messages for select
-  using (exists (select 1 from public.group_members m
-                 where m.group_id = group_messages.group_id and m.user_id = auth.uid()));
+  using (public.is_group_member(group_id, auth.uid()));
 create policy gm_insert on public.group_messages for insert
-  with check (user_id = auth.uid() and exists
-              (select 1 from public.group_members m
-               where m.group_id = group_messages.group_id and m.user_id = auth.uid()));
+  with check (user_id = auth.uid() and public.is_group_member(group_id, auth.uid()));
 create policy gm_delete on public.group_messages for delete
   using (user_id = auth.uid());
 
@@ -46,8 +44,7 @@ create policy fr_delete on public.feed_reactions for delete
 
 -- any member may update their group (name, image)
 create policy groups_update_members on public.groups for update
-  using (exists (select 1 from public.group_members m
-                 where m.group_id = id and m.user_id = auth.uid()));
+  using (public.is_group_member(id, auth.uid()));
 
 alter publication supabase_realtime add table public.group_messages;
 

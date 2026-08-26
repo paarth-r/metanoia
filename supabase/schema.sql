@@ -102,6 +102,11 @@ create index feed_events_created_idx on public.feed_events (created_at desc);
 
 -- ---------- helper functions ----------
 
+create or replace function public.is_group_member(gid uuid, uid uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from group_members where group_id = gid and user_id = uid);
+$$;
+
 create or replace function public.are_friends(u1 uuid, u2 uuid)
 returns boolean language sql stable security definer set search_path = public as $$
   select exists (
@@ -193,17 +198,16 @@ create policy friendships_delete on public.friendships for delete
 
 -- groups: members see their groups; anyone signed in can create one.
 create policy groups_select on public.groups for select
-  using (owner = auth.uid() or exists
-         (select 1 from public.group_members m where m.group_id = id and m.user_id = auth.uid()));
+  using (owner = auth.uid() or public.is_group_member(id, auth.uid()));
 create policy groups_insert on public.groups for insert
   with check (auth.uid() = owner);
 create policy groups_delete on public.groups for delete
   using (auth.uid() = owner);
 
+-- NOTE: must go through the security-definer helper; a subquery on
+-- group_members inside its own policy is infinite recursion (42P17).
 create policy group_members_select on public.group_members for select
-  using (user_id = auth.uid() or exists
-         (select 1 from public.group_members m where m.group_id = group_members.group_id
-          and m.user_id = auth.uid()));
+  using (public.is_group_member(group_id, auth.uid()));
 create policy group_members_delete on public.group_members for delete
   using (user_id = auth.uid());
 -- inserts happen through join_group() or group creation (security definer)
