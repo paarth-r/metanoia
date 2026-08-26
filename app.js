@@ -1,0 +1,1365 @@
+'use strict';
+/* Metanoia - 30-day resets you run in public.
+   Frontend: static SPA. Backend: Supabase (auth, Postgres with RLS, realtime).
+   Guest mode works with no backend: plan and ticks in localStorage. */
+
+/* ================= constants ================= */
+
+var TOTAL = 30;
+var PLAN_KEY = 'metanoia_plan_v1';
+var STATE_KEY = 'metanoia_state_v1';
+var SEEN_KEY = 'metanoia_feed_seen_v1';
+
+var QUOTES = [
+  ['You have power over your mind, not outside events. Realize this, and you will find strength.', 'Marcus Aurelius'],
+  ['Waste no more time arguing about what a good man should be. Be one.', 'Marcus Aurelius'],
+  ['It is not that we have a short time to live, but that we waste a lot of it.', 'Seneca'],
+  ['No man is free who is not master of himself.', 'Epictetus'],
+  ['The impediment to action advances action. What stands in the way becomes the way.', 'Marcus Aurelius'],
+  ['First say to yourself what you would be; and then do what you have to do.', 'Epictetus'],
+  ['Luck is what happens when preparation meets opportunity.', 'Seneca'],
+  ['If it is not right, do not do it; if it is not true, do not say it.', 'Marcus Aurelius'],
+  ['We suffer more often in imagination than in reality.', 'Seneca'],
+  ['Do not explain your philosophy. Embody it.', 'Epictetus'],
+  ['The best revenge is to be unlike him who performed the injury.', 'Marcus Aurelius'],
+  ['Difficulties strengthen the mind, as labor does the body.', 'Seneca'],
+  ['How long are you going to wait before you demand the best for yourself?', 'Epictetus'],
+  ['Confine yourself to the present.', 'Marcus Aurelius'],
+  ['While we wait for life, life passes.', 'Seneca'],
+  ['Progress is not achieved by luck or accident, but by working on yourself daily.', 'Epictetus'],
+  ['The soul becomes dyed with the color of its thoughts.', 'Marcus Aurelius'],
+  ['He who is brave is free.', 'Seneca'],
+  ['It is not what happens to you, but how you react to it that matters.', 'Epictetus'],
+  ['Do every act of your life as though it were the last act of your life.', 'Marcus Aurelius'],
+  ['Begin at once to live, and count each separate day as a separate life.', 'Seneca'],
+  ['Wealth consists not in having great possessions, but in having few wants.', 'Epictetus'],
+  ['Very little is needed to make a happy life; it is all within yourself.', 'Marcus Aurelius'],
+  ['Nothing is ours, except time.', 'Seneca'],
+  ['Only the educated are free.', 'Epictetus'],
+  ['That which is not good for the swarm, neither is it good for the bee.', 'Marcus Aurelius'],
+  ['Each night, ask yourself: what weakness did I overcome today? What virtue did I acquire?', 'Seneca'],
+  ['Circumstances do not make the man; they only reveal him to himself.', 'Epictetus'],
+  ['When you arise in the morning, think of what a precious privilege it is to be alive.', 'Marcus Aurelius'],
+  ['As long as you live, keep learning how to live.', 'Seneca']
+];
+
+var HABIT_SUGGESTIONS = [
+  'No phone, first 30 min', '90-min deep work block', 'Train (lift, run, or sport)',
+  '20 min reading', '1 deliberate social rep', 'Zero short-form feeds',
+  'Evening review (3 lines)', 'Wake before 7', '10 min meditation',
+  'In bed by 11', 'No sugar', '10k steps'
+];
+var TARGET_SUGGESTIONS = [
+  ['Lift', 3], ['Cardio', 2], ['Deep project session', 2],
+  ['Reach out to someone', 1], ['Weekly review', 1], ['Practice a skill', 2]
+];
+
+var PAARTH_PLAN = {
+  name: "Paarth's Reset",
+  intent: 'Dopamine detox. Immaculate grades. Money, golf, iron discipline.',
+  startISO: '2026-08-25',
+  habits: ['No phone, first 30 min', '90-min deep work block', 'Homework + 30 min ahead',
+    '20 min philosophy', '1 social rep', 'Zero short-form', 'Evening review'],
+  targets: [['Lift', 3], ['Golf', 1], ['Mashgin', 2], ['Hyperform', 2],
+    ['FRC', 2], ['Repair action', 1], ['Sunday review', 1]],
+  weekMeta: [null,
+    { social: 'Presence basics', reading: 'Meditations, Books I-VI' },
+    { social: 'Initiation', reading: 'Meditations VII-XII + Seneca' },
+    { social: 'Command', reading: 'Machiavelli, The Prince' },
+    { social: 'Composure under stakes', reading: 'Notes from Underground' }]
+};
+
+/* ================= small utilities ================= */
+
+function el(tag, cls, text) {
+  var e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+function clear() { var r = document.getElementById('root'); r.textContent = ''; return r; }
+var chipTimer = null;
+function chip(msg) {
+  var c = document.getElementById('chip');
+  c.textContent = msg; c.classList.add('show');
+  if (chipTimer) clearTimeout(chipTimer);
+  chipTimer = setTimeout(function () { c.classList.remove('show'); }, 2400);
+}
+function lsGet(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+function lsDel(k) { try { localStorage.removeItem(k); } catch (e) {} }
+
+function parseISO(iso) {
+  var p = String(iso || '').split('-');
+  return new Date(+p[0], +p[1] - 1, +p[2]);
+}
+function isoToday() {
+  var n = new Date();
+  return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0') + '-' +
+    String(n.getDate()).padStart(2, '0');
+}
+function dayNumOf(startISO) {
+  var n = new Date();
+  var t0 = new Date(n.getFullYear(), n.getMonth(), n.getDate());
+  return Math.round((t0 - parseISO(startISO)) / 864e5) + 1;
+}
+function dateOfDay(startISO, d) {
+  var x = parseISO(startISO);
+  x.setDate(x.getDate() + (d - 1));
+  return x;
+}
+function fmtDay(startISO, d) {
+  var D = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  var M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var x = dateOfDay(startISO, d);
+  return D[x.getDay()] + ' ' + M[x.getMonth()] + ' ' + x.getDate();
+}
+function weekOf(d) { return Math.min(4, Math.ceil(d / 7)); }
+function ago(ts) {
+  var s = (Date.now() - new Date(ts).getTime()) / 1000;
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
+function esc(s) { return String(s == null ? '' : s); }
+
+/* ================= supabase ================= */
+
+var CFG = window.METANOIA_CONFIG || {};
+var sb = (CFG.supabaseUrl && CFG.supabaseAnonKey && window.supabase)
+  ? window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseAnonKey)
+  : null;
+var session = null;
+var myProfile = null;
+var SP = null;              // {plan, days:{}, weeks:{}} - my server plan cache
+var feedUnseen = 0;
+var realtimeStarted = false;
+
+function backendReady() { return !!sb; }
+function signedIn() { return !!(sb && session); }
+
+async function loadMyProfile() {
+  if (!signedIn()) { myProfile = null; return; }
+  var r = await sb.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
+  myProfile = r.data || null;
+}
+async function loadMyPlan() {
+  SP = null;
+  if (!signedIn()) return;
+  var p = await sb.from('plans').select('*').eq('owner', session.user.id)
+    .order('created_at', { ascending: false }).limit(1).maybeSingle();
+  if (!p.data) return;
+  var days = {}, weeks = {};
+  var dr = await sb.from('plan_days').select('*').eq('plan_id', p.data.id);
+  (dr.data || []).forEach(function (r) { days[r.day] = r.checks; });
+  var wr = await sb.from('plan_weeks').select('*').eq('plan_id', p.data.id);
+  (wr.data || []).forEach(function (r) { weeks[r.week] = r.checks; });
+  SP = { plan: p.data, days: days, weeks: weeks };
+}
+
+/* debounced remote persistence */
+var dirtyDays = {}, dirtyWeeks = {}, flushTimer = null;
+function queueDay(d) { dirtyDays[d] = true; queueFlush(); }
+function queueWeek(w) { dirtyWeeks[w] = true; queueFlush(); }
+function queueFlush() {
+  if (flushTimer) clearTimeout(flushTimer);
+  flushTimer = setTimeout(flushRemote, 1800);
+}
+async function flushRemote() {
+  if (!signedIn() || !SP) return;
+  var days = Object.keys(dirtyDays); dirtyDays = {};
+  var weeks = Object.keys(dirtyWeeks); dirtyWeeks = {};
+  var nH = SP.plan.habits.length;
+  try {
+    for (var i = 0; i < days.length; i++) {
+      var d = +days[i];
+      await sb.from('plan_days').upsert({
+        plan_id: SP.plan.id, day: d, checks: SP.days[d] || [],
+        updated_at: new Date().toISOString()
+      });
+      if (SP.plan.visibility !== 'private') {
+        var sc = scoreOf(SP.days[d], nH);
+        await sb.from('feed_events').insert({
+          user_id: session.user.id, plan_id: SP.plan.id,
+          kind: sc === nH ? 'perfect' : 'tick', day: d,
+          payload: { score: sc, total: nH, plan_name: SP.plan.name }
+        });
+      }
+    }
+    for (var j = 0; j < weeks.length; j++) {
+      var w = +weeks[j];
+      await sb.from('plan_weeks').upsert({
+        plan_id: SP.plan.id, week: w, checks: SP.weeks[w] || {},
+        updated_at: new Date().toISOString()
+      });
+    }
+    if (days.length || weeks.length) chip('Saved to your public ledger');
+  } catch (e) { chip('Save failed. Check your connection.'); }
+}
+
+function scoreOf(arr, nH) {
+  if (!arr) return 0;
+  var c = 0; for (var i = 0; i < arr.length && i < nH; i++) if (arr[i]) c++;
+  return c;
+}
+
+/* feed */
+async function fetchFeed() {
+  if (!signedIn()) return [];
+  var r = await sb.from('feed_events')
+    .select('*, profiles(username, display_name), plans(name)')
+    .order('created_at', { ascending: false }).limit(120);
+  var rows = r.data || [];
+  /* keep only the newest tick event per (user, plan, day) */
+  var seen = {}, out = [];
+  rows.forEach(function (ev) {
+    var key = (ev.kind === 'tick' || ev.kind === 'perfect')
+      ? ev.user_id + '|' + ev.plan_id + '|' + ev.day : 'id' + ev.id;
+    if (seen[key]) return;
+    seen[key] = true;
+    out.push(ev);
+  });
+  return out;
+}
+function startRealtime() {
+  if (!signedIn() || realtimeStarted) return;
+  realtimeStarted = true;
+  sb.channel('feed-live')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'feed_events' },
+      function (msg) {
+        if (msg.new && msg.new.user_id !== session.user.id) {
+          feedUnseen++;
+          renderNav();
+          if (location.hash === '#/feed') route();
+        }
+      })
+    .subscribe();
+}
+
+/* ================= reusable ledger renderer ================= */
+
+/* ctx: {plan:{name,intent,startISO,habits,targets,weekMeta}, readOnly,
+         getDay(d)->arr, toggleDay(d,i), getWeek(w)->obj, toggleWeek(w,t,p)} */
+function renderLedger(wrap, ctx) {
+  var plan = ctx.plan;
+  var nH = plan.habits.length;
+  var tn = dayNumOf(plan.startISO);
+  var sel = ctx.sel != null ? ctx.sel : Math.max(1, Math.min(TOTAL, tn));
+
+  var upto = Math.min(Math.max(tn, 0), TOTAL);
+  var sum = 0, perfect = 0;
+  for (var d0 = 1; d0 <= upto; d0++) {
+    var s0 = scoreOf(ctx.getDay(d0), nH); sum += s0; if (s0 === nH) perfect++;
+  }
+  var streak = 0, sd = upto;
+  if (upto >= 1 && scoreOf(ctx.getDay(upto), nH) < nH) sd = upto - 1;
+  for (var d1 = sd; d1 >= 1; d1--) { if (scoreOf(ctx.getDay(d1), nH) === nH) streak++; else break; }
+
+  var row = el('div', 'statrow');
+  var pairs = tn < 1
+    ? [[String(1 - tn), 'days to start'], ['-', 'streak'], ['-', 'perfect']]
+    : tn > TOTAL
+      ? [['Done', 'thirty days'], [String(perfect), 'perfect days'], [(sum / TOTAL).toFixed(1), 'avg score']]
+      : [['Day ' + tn, 'of 30'], [String(streak), 'streak'], [upto ? (sum / upto).toFixed(1) : '-', 'avg /' + nH]];
+  pairs.forEach(function (p) {
+    var stEl = el('div', 'stat');
+    stEl.appendChild(el('b', null, p[0]));
+    stEl.appendChild(el('span', null, p[1]));
+    row.appendChild(stEl);
+  });
+  wrap.appendChild(row);
+
+  var q = QUOTES[(Math.max(1, Math.min(TOTAL, Math.max(tn, 1))) - 1) % QUOTES.length];
+  wrap.appendChild(el('div', 'quote', '"' + q[0] + '"'));
+  wrap.appendChild(el('div', 'quote-a', q[1]));
+
+  /* day card */
+  var editable = !ctx.readOnly && tn >= 1 && sel <= tn;
+  var card = el('div', 'card');
+  var dh = el('div', 'dayhead');
+  dh.appendChild(el('span', 'dn', 'Day ' + sel));
+  dh.appendChild(el('span', 'dd', fmtDay(plan.startISO, sel) + (sel === tn ? ' - today' : '')));
+  card.appendChild(dh);
+  var arr = ctx.getDay(sel) || [];
+  for (var h = 0; h < nH; h++) {
+    (function (h2) {
+      var on = !!arr[h2];
+      var b = el('button', 'habit' + (on ? ' on' : '') + (ctx.readOnly ? ' static' : ''));
+      b.type = 'button';
+      if (!editable) b.disabled = ctx.readOnly ? false : true;
+      if (ctx.readOnly) b.disabled = false;
+      b.appendChild(el('span', 'box'));
+      b.appendChild(el('span', 'lbl', plan.habits[h2]));
+      if (editable) b.addEventListener('click', function () {
+        ctx.toggleDay(sel, h2);
+        ctx.sel = sel;
+        ctx.rerender();
+      });
+      card.appendChild(b);
+    })(h);
+  }
+  var sl = el('div', 'scoreline');
+  var sc = scoreOf(arr, nH);
+  sl.appendChild(el('b', null, sc + ' / ' + nH));
+  if (sel < tn && sc < nH) sl.appendChild(el('span', 'miss', (nH - sc) + ' missed'));
+  if (dateOfDay(plan.startISO, sel).getDay() === 0) sl.appendChild(el('span', 'dd', 'Sunday: review the week'));
+  card.appendChild(sl);
+  wrap.appendChild(card);
+
+  /* weekly targets */
+  if (plan.targets && plan.targets.length) {
+    var w = weekOf(Math.max(1, Math.min(TOTAL, sel)));
+    var wcard = el('div', 'card');
+    wcard.appendChild(el('h2', null, 'Week ' + w + ' targets'));
+    if (plan.weekMeta && plan.weekMeta[w]) {
+      var wm = el('div', 'wmeta');
+      wm.appendChild(document.createTextNode('Social: '));
+      wm.appendChild(el('em', null, plan.weekMeta[w].social));
+      wm.appendChild(document.createTextNode('  -  Reading: '));
+      wm.appendChild(el('em', null, plan.weekMeta[w].reading));
+      wcard.appendChild(wm);
+    }
+    var wEditable = !ctx.readOnly && tn >= 1 && w <= weekOf(Math.max(1, Math.min(TOTAL, tn)));
+    var tg = el('div', 'targets');
+    var wo = ctx.getWeek(w) || {};
+    for (var t = 0; t < plan.targets.length; t++) {
+      var box = el('div', 'tgt');
+      box.appendChild(el('span', 'tl', plan.targets[t][0]));
+      var count = plan.targets[t][1];
+      for (var p = 0; p < count; p++) {
+        (function (t2, p2) {
+          var on = !!(wo[t2] && wo[t2][p2]);
+          var pip = el('button', 'pip' + (on ? ' on' : ''));
+          pip.type = 'button';
+          pip.setAttribute('aria-label', plan.targets[t2][0] + ' ' + (p2 + 1));
+          if (!wEditable) pip.disabled = true;
+          if (wEditable) pip.addEventListener('click', function () {
+            ctx.toggleWeek(w, t2, p2);
+            ctx.sel = sel;
+            ctx.rerender();
+          });
+          box.appendChild(pip);
+        })(t, p);
+      }
+      tg.appendChild(box);
+    }
+    wcard.appendChild(tg);
+    wrap.appendChild(wcard);
+  }
+
+  /* grid */
+  var gcard = el('div', 'card');
+  gcard.appendChild(el('h2', null, 'The thirty days'));
+  var grid = el('div', 'grid');
+  for (var g = 1; g <= TOTAL; g++) {
+    (function (g2) {
+      var scG = scoreOf(ctx.getDay(g2), nH);
+      var cls = 'cell';
+      if (g2 > tn) cls += ' future';
+      if (scG === nH && nH > 0) cls += ' perfect';
+      if (g2 < tn && scG === 0) cls += ' zero-past';
+      if (g2 === sel) cls += ' sel';
+      if (ctx.readOnly) cls += ' static';
+      var c = el(ctx.readOnly ? 'div' : 'button', cls);
+      if (!ctx.readOnly) {
+        c.type = 'button';
+        if (g2 > tn) c.disabled = true;
+        c.addEventListener('click', function () {
+          if (g2 > tn) return;
+          ctx.sel = g2;
+          ctx.rerender();
+          window.scrollTo({ top: 0 });
+        });
+      }
+      c.appendChild(el('span', 'n', String(g2)));
+      var bar = el('span', 'bar');
+      var fill = el('i');
+      fill.style.width = (nH ? Math.round(scG / nH * 100) : 0) + '%';
+      bar.appendChild(fill);
+      c.appendChild(bar);
+      grid.appendChild(c);
+    })(g);
+  }
+  gcard.appendChild(grid);
+  wrap.appendChild(gcard);
+}
+
+/* ================= nav ================= */
+
+function renderNav() {
+  var nav = document.getElementById('topnav');
+  nav.textContent = '';
+  var brand = el('a', 'brand', 'Metanoia');
+  brand.href = '#/';
+  nav.appendChild(brand);
+  var links = signedIn()
+    ? [['#/track', 'Ledger'], ['#/feed', 'Feed'], ['#/people', 'People'], ['#/settings', 'Account']]
+    : (backendReady() ? [['#/auth', 'Sign in']] : []);
+  var cur = location.hash || '#/';
+  links.forEach(function (l) {
+    var a = el('a', 'navlink' + (cur.indexOf(l[0]) === 0 ? ' active' : ''), l[1]);
+    a.href = l[0];
+    if (l[0] === '#/feed' && feedUnseen > 0) {
+      a.appendChild(el('span', 'badge', feedUnseen > 9 ? '9+' : String(feedUnseen)));
+    }
+    nav.appendChild(a);
+  });
+}
+
+/* ================= views ================= */
+
+function renderLanding() {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  wrap.appendChild(el('div', 'eyebrow', 'Thirty-day resets, run in public'));
+  wrap.appendChild(el('h1', null, 'Metanoia'));
+  wrap.appendChild(el('div', 'sub',
+    'noun. A transformative change of heart and mind; the moment you turn your life around.'));
+
+  var rules = el('div', 'rules');
+  [['Choose your non-negotiables.', 'Three to seven things you will do every single day. Not goals. Actions.'],
+   ['Tick them for thirty days.', 'The ledger fills in black when you are perfect and red when you were not there at all.'],
+   ['Let people watch.', 'Share the ledger with friends and groups. Accountability is a feed they scroll.'],
+   ['Never miss twice.', 'One slip is a data point. Two in a row is a new habit forming in the wrong direction.']
+  ].forEach(function (r) {
+    var ru = el('div', 'rule');
+    ru.appendChild(el('b', null, r[0]));
+    ru.appendChild(el('span', null, r[1]));
+    rules.appendChild(ru);
+  });
+  wrap.appendChild(rules);
+
+  var br = el('div', 'btnrow');
+  if (signedIn()) {
+    var b0 = el('a', 'btn', 'Open my ledger'); b0.href = '#/track';
+    br.appendChild(b0);
+  } else {
+    var b1 = el('a', 'btn', backendReady() ? 'Sign in and start' : 'Start your 30 days');
+    b1.href = backendReady() ? '#/auth' : '#/new';
+    br.appendChild(b1);
+    if (backendReady()) {
+      var bg = el('a', 'btn ghost', 'Try it without an account'); bg.href = '#/new';
+      br.appendChild(bg);
+    }
+  }
+  var b2 = el('button', 'btn ghost', 'Load account'); b2.type = 'button';
+  br.appendChild(b2);
+  wrap.appendChild(br);
+
+  var acct = el('div', 'io');
+  var ar = el('div', 'addrow'); ar.style.marginTop = '14px';
+  var nameIn = el('input');
+  nameIn.type = 'text'; nameIn.placeholder = 'Username'; nameIn.maxLength = 30;
+  nameIn.setAttribute('autocapitalize', 'none');
+  var goB = el('button', 'btn', 'Open'); goB.type = 'button';
+  ar.appendChild(nameIn); ar.appendChild(goB);
+  acct.appendChild(ar);
+  wrap.appendChild(acct);
+  b2.addEventListener('click', function () {
+    acct.classList.toggle('open');
+    if (acct.classList.contains('open')) nameIn.focus();
+  });
+  function openAccount() {
+    var v = nameIn.value.trim().toLowerCase();
+    if (v) location.hash = '#/u/' + encodeURIComponent(v);
+  }
+  goB.addEventListener('click', openAccount);
+  nameIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); openAccount(); } });
+
+  var q = QUOTES[new Date().getDate() % QUOTES.length];
+  wrap.appendChild(el('div', 'quote', '"' + q[0] + '"'));
+  wrap.appendChild(el('div', 'quote-a', q[1]));
+
+  var foot = el('div', 'foot');
+  foot.textContent = backendReady()
+    ? 'Private goals stay private. Friends-only goals reach your friends and groups. Public goals are a page anyone can watch.'
+    : 'Running in guest mode: your plan lives in this browser only. The shared backend is not configured yet.';
+  wrap.appendChild(foot);
+  root.appendChild(wrap);
+}
+
+function renderAuth() {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  wrap.appendChild(el('div', 'eyebrow', 'Metanoia'));
+  wrap.appendChild(el('div', 'q', 'Sign in'));
+  var card = el('div', 'card');
+  if (!backendReady()) {
+    card.appendChild(el('div', 'hint', 'The backend is not configured yet. Guest mode still works from the landing page.'));
+    wrap.appendChild(card); root.appendChild(wrap); return;
+  }
+  card.appendChild(el('div', 'hint',
+    'Magic link, no password. Enter your email and click the link it sends; you land back here signed in.'));
+  var ar = el('div', 'addrow');
+  var em = el('input'); em.type = 'email'; em.placeholder = 'you@example.com';
+  var go = el('button', 'btn', 'Send link'); go.type = 'button';
+  ar.appendChild(em); ar.appendChild(go);
+  card.appendChild(ar);
+  var msg = el('div', 'ok', '');
+  card.appendChild(msg);
+  go.addEventListener('click', async function () {
+    var v = em.value.trim();
+    if (!v) return;
+    msg.textContent = 'Sending...';
+    var r = await sb.auth.signInWithOtp({
+      email: v,
+      options: { emailRedirectTo: location.origin + location.pathname }
+    });
+    msg.textContent = r.error ? ('Could not send: ' + r.error.message) : 'Sent. Check your email, then come back here.';
+  });
+  wrap.appendChild(card);
+  root.appendChild(wrap);
+}
+
+/* ---------- wizard ---------- */
+
+var W = null;
+function freshW() {
+  return { step: 1, name: '', intent: '', startISO: isoToday(), habits: [], targets: [],
+    visibility: 'friends', err: '' };
+}
+
+function renderWizard() {
+  if (!W) W = freshW();
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  var steps = signedIn() ? 5 : 4;
+  wrap.appendChild(el('div', 'eyebrow', 'Metanoia'));
+  wrap.appendChild(el('div', 'steplbl', 'Step ' + W.step + ' of ' + steps));
+
+  var card = el('div', 'card');
+  if (W.err) card.appendChild(el('div', 'err', W.err));
+
+  if (W.step === 1) {
+    card.appendChild(el('div', 'q', 'What is this reset called, and why now?'));
+    card.appendChild(el('div', 'hint',
+      'Name it like it matters. Then one sentence on what you are turning around. You will read it every day for a month.'));
+    var nameIn = el('input');
+    nameIn.type = 'text'; nameIn.placeholder = 'My Reset'; nameIn.value = W.name; nameIn.maxLength = 40;
+    nameIn.addEventListener('input', function () { W.name = nameIn.value; });
+    card.appendChild(nameIn);
+    card.appendChild(el('div', 'hint', ''));
+    var intentIn = el('textarea');
+    intentIn.placeholder = 'Why now. What changes.'; intentIn.value = W.intent; intentIn.maxLength = 140;
+    intentIn.addEventListener('input', function () { W.intent = intentIn.value; });
+    card.appendChild(intentIn);
+  }
+
+  if (W.step === 2) {
+    card.appendChild(el('div', 'q', 'When does day one begin?'));
+    card.appendChild(el('div', 'hint',
+      'Today is the honest answer. A start date in the future is usually procrastination wearing a calendar.'));
+    var dIn = el('input');
+    dIn.type = 'date'; dIn.value = W.startISO;
+    dIn.addEventListener('input', function () { if (dIn.value) W.startISO = dIn.value; });
+    card.appendChild(dIn);
+  }
+
+  if (W.step === 3) {
+    card.appendChild(el('div', 'q', 'Your daily non-negotiables.'));
+    card.appendChild(el('div', 'hint',
+      'Pick 3 to 7. Every one must be a concrete action you can tick before midnight on your worst day, not just your best.'));
+    var chips = el('div', 'chips');
+    HABIT_SUGGESTIONS.forEach(function (label) {
+      var on = W.habits.indexOf(label) >= 0;
+      var c = el('button', 'chipb' + (on ? ' on' : ''), label);
+      c.type = 'button';
+      c.addEventListener('click', function () {
+        var ix = W.habits.indexOf(label);
+        if (ix >= 0) W.habits.splice(ix, 1);
+        else if (W.habits.length < 7) W.habits.push(label);
+        W.err = ''; renderWizard();
+      });
+      chips.appendChild(c);
+    });
+    card.appendChild(chips);
+    var ar = el('div', 'addrow');
+    var custom = el('input'); custom.type = 'text'; custom.placeholder = 'Add your own'; custom.maxLength = 40;
+    var addB = el('button', 'btn ghost', 'Add'); addB.type = 'button';
+    function addCustom() {
+      var v = custom.value.trim();
+      if (!v) return;
+      if (W.habits.length >= 7) { W.err = 'Seven is the cap. Discipline is subtraction.'; renderWizard(); return; }
+      if (W.habits.indexOf(v) < 0) W.habits.push(v);
+      custom.value = ''; W.err = ''; renderWizard();
+    }
+    addB.addEventListener('click', addCustom);
+    custom.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); addCustom(); } });
+    ar.appendChild(custom); ar.appendChild(addB);
+    card.appendChild(ar);
+    card.appendChild(el('div', 'count', W.habits.length + ' of 7 chosen (minimum 3)'));
+    if (W.habits.length) {
+      var tl = el('div', 'tlist');
+      W.habits.forEach(function (hb, ix) {
+        var rowE = el('div', 'trow');
+        rowE.appendChild(el('span', 'tl2', hb));
+        var x = el('button', 'xb', 'remove'); x.type = 'button';
+        x.addEventListener('click', function () { W.habits.splice(ix, 1); renderWizard(); });
+        rowE.appendChild(x);
+        tl.appendChild(rowE);
+      });
+      card.appendChild(tl);
+    }
+  }
+
+  if (W.step === 4) {
+    card.appendChild(el('div', 'q', 'Weekly targets.'));
+    card.appendChild(el('div', 'hint',
+      'Things that happen a few times a week, not daily. Optional but recommended. Tap a suggestion or add your own with a per-week count.'));
+    var chips2 = el('div', 'chips');
+    TARGET_SUGGESTIONS.forEach(function (sug) {
+      var have = W.targets.some(function (t) { return t[0] === sug[0]; });
+      var c = el('button', 'chipb' + (have ? ' on' : ''), sug[0] + ' x' + sug[1]);
+      c.type = 'button';
+      c.addEventListener('click', function () {
+        var ix = -1;
+        W.targets.forEach(function (t, k) { if (t[0] === sug[0]) ix = k; });
+        if (ix >= 0) W.targets.splice(ix, 1);
+        else if (W.targets.length < 8) W.targets.push([sug[0], sug[1]]);
+        renderWizard();
+      });
+      chips2.appendChild(c);
+    });
+    card.appendChild(chips2);
+    var ar2 = el('div', 'addrow');
+    var tIn = el('input'); tIn.type = 'text'; tIn.placeholder = 'Custom target'; tIn.maxLength = 30;
+    var cIn = el('input'); cIn.type = 'number'; cIn.min = 1; cIn.max = 7; cIn.value = 2;
+    cIn.style.width = '70px'; cIn.style.flex = 'none';
+    var addT = el('button', 'btn ghost', 'Add'); addT.type = 'button';
+    addT.addEventListener('click', function () {
+      var v = tIn.value.trim();
+      var n = Math.max(1, Math.min(7, parseInt(cIn.value, 10) || 1));
+      if (!v || W.targets.length >= 8) return;
+      W.targets.push([v, n]); tIn.value = ''; renderWizard();
+    });
+    ar2.appendChild(tIn); ar2.appendChild(cIn); ar2.appendChild(addT);
+    card.appendChild(ar2);
+    if (W.targets.length) {
+      var tl2 = el('div', 'tlist');
+      W.targets.forEach(function (t, ix) {
+        var rowE = el('div', 'trow');
+        rowE.appendChild(el('span', 'tl2', t[0] + '  x' + t[1] + ' per week'));
+        var x = el('button', 'xb', 'remove'); x.type = 'button';
+        x.addEventListener('click', function () { W.targets.splice(ix, 1); renderWizard(); });
+        rowE.appendChild(x);
+        tl2.appendChild(rowE);
+      });
+      card.appendChild(tl2);
+    }
+  }
+
+  if (W.step === 5) {
+    card.appendChild(el('div', 'q', 'Who watches?'));
+    card.appendChild(el('div', 'hint',
+      'Accountability is the point, but it is your call. You can change this later in Account.'));
+    [['public', 'Public', 'Anyone with your username can watch the ledger fill in. Maximum stakes.'],
+     ['friends', 'Friends and groups', 'Accepted friends and your group-mates see it in their feed.'],
+     ['private', 'Private', 'Yours alone. Not in any feed, invisible on your profile.']
+    ].forEach(function (opt) {
+      var lab = el('label', 'vradio');
+      var inp = el('input'); inp.type = 'radio'; inp.name = 'vis'; inp.value = opt[0];
+      inp.checked = W.visibility === opt[0];
+      inp.addEventListener('change', function () { W.visibility = opt[0]; });
+      lab.appendChild(inp);
+      lab.appendChild(el('b', null, opt[1]));
+      lab.appendChild(el('div', null, opt[2]));
+      card.appendChild(lab);
+    });
+  }
+
+  wrap.appendChild(card);
+
+  var nav = el('div', 'navrow');
+  var back = el('button', 'btn ghost', W.step === 1 ? 'Cancel' : 'Back'); back.type = 'button';
+  back.addEventListener('click', function () {
+    if (W.step === 1) { W = null; location.hash = '#/'; return; }
+    W.step--; W.err = ''; renderWizard();
+  });
+  var fwd = el('button', 'btn', W.step === steps ? 'Begin the thirty days' : 'Continue');
+  fwd.type = 'button';
+  fwd.addEventListener('click', async function () {
+    if (W.step === 3 && W.habits.length < 3) {
+      W.err = 'Pick at least three. Fewer than that is not a reset.'; renderWizard(); return;
+    }
+    if (W.step < steps) { W.step++; W.err = ''; renderWizard(); return; }
+    var planObj = {
+      name: W.name.trim() || 'My Reset',
+      intent: W.intent.trim(),
+      startISO: W.startISO,
+      habits: W.habits.slice(),
+      targets: W.targets.slice(),
+      weekMeta: null,
+      visibility: W.visibility
+    };
+    if (signedIn()) {
+      fwd.disabled = true; fwd.textContent = 'Creating...';
+      var ok = await createRemotePlan(planObj);
+      if (!ok) { fwd.disabled = false; fwd.textContent = 'Begin the thirty days'; return; }
+    } else {
+      lsSet(PLAN_KEY, planObj);
+      lsSet(STATE_KEY, { days: {}, weeks: {} });
+    }
+    W = null;
+    location.hash = '#/track';
+  });
+  nav.appendChild(back); nav.appendChild(fwd);
+  wrap.appendChild(nav);
+  root.appendChild(wrap);
+}
+
+async function createRemotePlan(planObj) {
+  var r = await sb.from('plans').insert({
+    owner: session.user.id,
+    name: planObj.name, intent: planObj.intent,
+    start_date: planObj.startISO,
+    habits: planObj.habits, targets: planObj.targets,
+    week_meta: planObj.weekMeta, visibility: planObj.visibility
+  }).select().single();
+  if (r.error) { chip('Could not create the plan: ' + r.error.message); return false; }
+  SP = { plan: r.data, days: {}, weeks: {} };
+  if (planObj.visibility !== 'private') {
+    await sb.from('feed_events').insert({
+      user_id: session.user.id, plan_id: r.data.id, kind: 'started',
+      payload: { plan_name: r.data.name }
+    });
+  }
+  return true;
+}
+
+/* ---------- tracker ---------- */
+
+var trackerSel = null;
+
+function planRowToObj(row) {
+  return { name: row.name, intent: row.intent, startISO: row.start_date,
+    habits: row.habits, targets: row.targets || [], weekMeta: row.week_meta,
+    visibility: row.visibility };
+}
+
+function renderTracker() {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+
+  var ctx = null;
+  if (signedIn() && SP && SP.plan) {
+    var pobj = planRowToObj(SP.plan);
+    ctx = {
+      plan: pobj, readOnly: false, sel: trackerSel,
+      getDay: function (d) { return SP.days[d]; },
+      toggleDay: function (d, i) {
+        if (!SP.days[d]) { SP.days[d] = []; for (var k = 0; k < pobj.habits.length; k++) SP.days[d].push(false); }
+        while (SP.days[d].length < pobj.habits.length) SP.days[d].push(false);
+        SP.days[d][i] = !SP.days[d][i];
+        queueDay(d);
+      },
+      getWeek: function (w) { return SP.weeks[w]; },
+      toggleWeek: function (w, t, p) {
+        if (!SP.weeks[w]) SP.weeks[w] = {};
+        if (!SP.weeks[w][t]) {
+          SP.weeks[w][t] = [];
+          for (var k = 0; k < pobj.targets[t][1]; k++) SP.weeks[w][t].push(false);
+        }
+        SP.weeks[w][t][p] = !SP.weeks[w][t][p];
+        queueWeek(w);
+      },
+      rerender: function () { trackerSel = ctx.sel; renderTracker(); }
+    };
+  } else if (!signedIn()) {
+    var lp = lsGet(PLAN_KEY);
+    var st = lsGet(STATE_KEY) || { days: {}, weeks: {} };
+    if (lp) {
+      ctx = {
+        plan: lp, readOnly: false, sel: trackerSel,
+        getDay: function (d) { return st.days[d]; },
+        toggleDay: function (d, i) {
+          if (!st.days[d]) { st.days[d] = []; for (var k = 0; k < lp.habits.length; k++) st.days[d].push(false); }
+          while (st.days[d].length < lp.habits.length) st.days[d].push(false);
+          st.days[d][i] = !st.days[d][i];
+          lsSet(STATE_KEY, st);
+        },
+        getWeek: function (w) { return st.weeks[w]; },
+        toggleWeek: function (w, t, p) {
+          if (!st.weeks[w]) st.weeks[w] = {};
+          if (!st.weeks[w][t]) {
+            st.weeks[w][t] = [];
+            for (var k = 0; k < lp.targets[t][1]; k++) st.weeks[w][t].push(false);
+          }
+          st.weeks[w][t][p] = !st.weeks[w][t][p];
+          lsSet(STATE_KEY, st);
+        },
+        rerender: function () { trackerSel = ctx.sel; renderTracker(); }
+      };
+    }
+  }
+
+  if (!ctx) {
+    wrap.appendChild(el('div', 'eyebrow', 'Your ledger'));
+    wrap.appendChild(el('h1', null, 'No reset yet'));
+    var card = el('div', 'card');
+    card.appendChild(el('div', 'hint', 'Build your thirty days, or adopt the original plan.'));
+    var br = el('div', 'btnrow'); br.style.marginTop = '4px';
+    var b1 = el('a', 'btn', 'Build my plan'); b1.href = '#/new';
+    var b2 = el('a', 'btn ghost', 'See the original'); b2.href = '#/paarth';
+    br.appendChild(b1); br.appendChild(b2);
+    var localPlan = lsGet(PLAN_KEY);
+    if (signedIn() && localPlan) {
+      var imp = el('button', 'btn ghost', 'Import my guest ledger'); imp.type = 'button';
+      imp.addEventListener('click', importLocal);
+      br.appendChild(imp);
+    }
+    card.appendChild(br);
+    wrap.appendChild(card);
+    root.appendChild(wrap);
+    return;
+  }
+
+  wrap.appendChild(el('div', 'eyebrow',
+    fmtDay(ctx.plan.startISO, 1) + ' - ' + fmtDay(ctx.plan.startISO, TOTAL)));
+  var h1 = el('h1', null, ctx.plan.name);
+  wrap.appendChild(h1);
+  if (ctx.plan.visibility) {
+    var vt = el('span', 'vtag', ctx.plan.visibility);
+    h1.appendChild(vt);
+  }
+  if (ctx.plan.intent) wrap.appendChild(el('div', 'sub', ctx.plan.intent));
+
+  renderLedger(wrap, ctx);
+
+  if (!signedIn() && backendReady()) {
+    var up = el('div', 'card');
+    up.appendChild(el('h2', null, 'Guest mode'));
+    up.appendChild(el('div', 'hint',
+      'This ledger lives only in this browser. Sign in and import it to sync across devices, share with friends, and appear in feeds.'));
+    var b = el('a', 'btn ghost', 'Sign in'); b.href = '#/auth';
+    up.appendChild(b);
+    wrap.appendChild(up);
+  }
+
+  var foot = el('div', 'foot');
+  foot.textContent = 'Never miss twice. Done before dopamine. The scorecard is the verdict on the day, not your feelings.';
+  wrap.appendChild(foot);
+  root.appendChild(wrap);
+}
+
+async function importLocal() {
+  var lp = lsGet(PLAN_KEY);
+  var st = lsGet(STATE_KEY) || { days: {}, weeks: {} };
+  if (!lp) return;
+  lp.visibility = lp.visibility || 'friends';
+  var ok = await createRemotePlan(lp);
+  if (!ok) return;
+  for (var d in st.days) {
+    await sb.from('plan_days').upsert({
+      plan_id: SP.plan.id, day: +d, checks: st.days[d], updated_at: new Date().toISOString()
+    });
+    SP.days[+d] = st.days[d];
+  }
+  for (var w in st.weeks) {
+    await sb.from('plan_weeks').upsert({
+      plan_id: SP.plan.id, week: +w, checks: st.weeks[w], updated_at: new Date().toISOString()
+    });
+    SP.weeks[+w] = st.weeks[w];
+  }
+  lsDel(PLAN_KEY); lsDel(STATE_KEY);
+  chip('Guest ledger imported');
+  renderTracker();
+}
+
+/* ---------- feed ---------- */
+
+async function renderFeed() {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  wrap.appendChild(el('div', 'eyebrow', 'The accountability feed'));
+  wrap.appendChild(el('h1', null, 'Feed'));
+  if (!signedIn()) {
+    var c0 = el('div', 'card');
+    c0.appendChild(el('div', 'hint', 'Sign in to see your friends and groups tick their days.'));
+    wrap.appendChild(c0); root.appendChild(wrap); return;
+  }
+  var card = el('div', 'card');
+  card.appendChild(el('div', 'hint', 'Loading...'));
+  wrap.appendChild(card);
+  root.appendChild(wrap);
+
+  var events = await fetchFeed();
+  feedUnseen = 0;
+  lsSet(SEEN_KEY, new Date().toISOString());
+  renderNav();
+
+  card.textContent = '';
+  if (!events.length) {
+    card.appendChild(el('div', 'hint',
+      'Quiet in here. Add friends or join a group under People, and their ticks show up as they happen.'));
+    return;
+  }
+  events.forEach(function (ev) {
+    var prof = ev.profiles || {};
+    var uname = prof.username || 'someone';
+    var pname = (ev.plans && ev.plans.name) || (ev.payload && ev.payload.plan_name) || 'a reset';
+    var item = el('div', 'feeditem' + (ev.kind === 'perfect' ? ' perfect' : ''));
+    item.appendChild(el('div', 'avatar', (uname[0] || '?')));
+    var body = el('div', 'fbody');
+    var line = el('div', 'fline');
+    var a = el('a', null, prof.display_name || uname);
+    a.href = '#/u/' + encodeURIComponent(uname);
+    line.appendChild(a);
+    var verb;
+    if (ev.kind === 'started') verb = ' started "' + pname + '". Watch them.';
+    else if (ev.kind === 'perfect') verb = ' went perfect on day ' + ev.day + ' of "' + pname + '".';
+    else if (ev.kind === 'finished') verb = ' finished the thirty days of "' + pname + '".';
+    else if (ev.kind === 'streak') verb = ' is on a ' + esc(ev.payload && ev.payload.streak) + '-day streak.';
+    else verb = ' ticked ' + esc(ev.payload && ev.payload.score) + '/' + esc(ev.payload && ev.payload.total) +
+      ' on day ' + ev.day + ' of "' + pname + '".';
+    line.appendChild(document.createTextNode(verb));
+    body.appendChild(line);
+    body.appendChild(el('div', 'fmeta', ago(ev.created_at)));
+    if ((ev.kind === 'tick' || ev.kind === 'perfect') && ev.payload && ev.payload.total) {
+      var bar = el('div', 'fbar');
+      var fill = el('i');
+      fill.style.width = Math.round((ev.payload.score / ev.payload.total) * 100) + '%';
+      bar.appendChild(fill);
+      body.appendChild(bar);
+    }
+    item.appendChild(body);
+    card.appendChild(item);
+  });
+}
+
+/* ---------- people (friends + groups) ---------- */
+
+async function renderPeople() {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  wrap.appendChild(el('div', 'eyebrow', 'Friends and groups'));
+  wrap.appendChild(el('h1', null, 'People'));
+  if (!signedIn()) {
+    var c0 = el('div', 'card');
+    c0.appendChild(el('div', 'hint', 'Sign in to add friends and form groups.'));
+    wrap.appendChild(c0); root.appendChild(wrap); return;
+  }
+  root.appendChild(wrap);
+
+  /* find people */
+  var find = el('div', 'card');
+  find.appendChild(el('h2', null, 'Add a friend'));
+  var ar = el('div', 'addrow');
+  var un = el('input'); un.type = 'text'; un.placeholder = 'Their username';
+  un.setAttribute('autocapitalize', 'none');
+  var req = el('button', 'btn', 'Request'); req.type = 'button';
+  ar.appendChild(un); ar.appendChild(req);
+  find.appendChild(ar);
+  var fmsg = el('div', 'ok', '');
+  find.appendChild(fmsg);
+  req.addEventListener('click', async function () {
+    var v = un.value.trim().toLowerCase();
+    if (!v) return;
+    var p = await sb.from('profiles').select('id, username').eq('username', v).maybeSingle();
+    if (!p.data) { fmsg.textContent = 'No one has claimed the username "' + v + '".'; return; }
+    if (p.data.id === session.user.id) { fmsg.textContent = 'That is you.'; return; }
+    var a = session.user.id < p.data.id ? session.user.id : p.data.id;
+    var b = session.user.id < p.data.id ? p.data.id : session.user.id;
+    var r = await sb.from('friendships').insert({
+      user_a: a, user_b: b, requested_by: session.user.id, status: 'pending'
+    });
+    fmsg.textContent = r.error
+      ? (r.error.code === '23505' ? 'Request already exists.' : 'Failed: ' + r.error.message)
+      : 'Requested. They accept from their People page.';
+    un.value = '';
+    loadLists();
+  });
+  wrap.appendChild(find);
+
+  var lists = el('div');
+  wrap.appendChild(lists);
+
+  async function loadLists() {
+    lists.textContent = '';
+    var r = await sb.from('friendships').select(
+      '*, a:profiles!friendships_user_a_fkey(id, username, display_name), b:profiles!friendships_user_b_fkey(id, username, display_name)');
+    var rows = r.data || [];
+    var friends = [], incoming = [], outgoing = [];
+    rows.forEach(function (row) {
+      var other = row.a && row.a.id === session.user.id ? row.b : row.a;
+      if (!other) return;
+      if (row.status === 'accepted') friends.push({ row: row, other: other });
+      else if (row.requested_by === session.user.id) outgoing.push({ row: row, other: other });
+      else incoming.push({ row: row, other: other });
+    });
+
+    if (incoming.length) {
+      var ic = el('div', 'card');
+      ic.appendChild(el('h2', null, 'Requests for you'));
+      incoming.forEach(function (f) {
+        var rowE = el('div', 'trow');
+        var a = el('a', 'tl2', f.other.display_name || f.other.username || 'unnamed');
+        a.href = '#/u/' + encodeURIComponent(f.other.username || '');
+        rowE.appendChild(a);
+        var acc = el('button', 'btn small', 'Accept'); acc.type = 'button';
+        acc.addEventListener('click', async function () {
+          await sb.from('friendships').update({ status: 'accepted' })
+            .eq('user_a', f.row.user_a).eq('user_b', f.row.user_b);
+          loadLists();
+        });
+        var dec = el('button', 'xb', 'decline'); dec.type = 'button';
+        dec.addEventListener('click', async function () {
+          await sb.from('friendships').delete()
+            .eq('user_a', f.row.user_a).eq('user_b', f.row.user_b);
+          loadLists();
+        });
+        rowE.appendChild(acc); rowE.appendChild(dec);
+        ic.appendChild(rowE);
+      });
+      lists.appendChild(ic);
+    }
+
+    var fc = el('div', 'card');
+    fc.appendChild(el('h2', null, 'Friends'));
+    if (!friends.length) fc.appendChild(el('div', 'hint', 'No friends yet. Accountability needs witnesses.'));
+    friends.forEach(function (f) {
+      var rowE = el('div', 'trow');
+      var a = el('a', 'tl2', f.other.display_name || f.other.username || 'unnamed');
+      a.href = '#/u/' + encodeURIComponent(f.other.username || '');
+      rowE.appendChild(a);
+      var rm = el('button', 'xb', 'remove'); rm.type = 'button';
+      rm.addEventListener('click', async function () {
+        if (!confirm('Remove this friend?')) return;
+        await sb.from('friendships').delete()
+          .eq('user_a', f.row.user_a).eq('user_b', f.row.user_b);
+        loadLists();
+      });
+      rowE.appendChild(rm);
+      fc.appendChild(rowE);
+    });
+    outgoing.forEach(function (f) {
+      var rowE = el('div', 'trow');
+      rowE.appendChild(el('span', 'tl2', (f.other.username || 'unnamed') + '  (pending)'));
+      fc.appendChild(rowE);
+    });
+    lists.appendChild(fc);
+
+    /* groups */
+    var gc = el('div', 'card');
+    gc.appendChild(el('h2', null, 'Groups'));
+    gc.appendChild(el('div', 'hint',
+      'Everyone in a group sees each other\'s friends-tier ledgers and feed events. Private plans stay private, even here.'));
+    var gr = await sb.from('groups').select('*, group_members(user_id, profiles(username, display_name))');
+    (gr.data || []).forEach(function (g) {
+      var rowE = el('div', 'trow');
+      var span = el('span', 'tl2');
+      span.appendChild(document.createTextNode(g.name + '  '));
+      var mem = (g.group_members || []).map(function (m) {
+        return (m.profiles && (m.profiles.username || m.profiles.display_name)) || '?';
+      });
+      span.appendChild(el('span', 'count', mem.join(', ')));
+      rowE.appendChild(span);
+      rowE.appendChild(el('span', 'count', 'code ' + g.invite_code));
+      var lv = el('button', 'xb', 'leave'); lv.type = 'button';
+      lv.addEventListener('click', async function () {
+        await sb.from('group_members').delete()
+          .eq('group_id', g.id).eq('user_id', session.user.id);
+        loadLists();
+      });
+      rowE.appendChild(lv);
+      gc.appendChild(rowE);
+    });
+    var mkRow = el('div', 'addrow'); mkRow.style.marginTop = '12px';
+    var gn = el('input'); gn.type = 'text'; gn.placeholder = 'New group name'; gn.maxLength = 40;
+    var mk = el('button', 'btn ghost', 'Create'); mk.type = 'button';
+    mk.addEventListener('click', async function () {
+      var v = gn.value.trim(); if (!v) return;
+      var r2 = await sb.rpc('create_group', { gname: v });
+      if (r2.error) chip('Could not create: ' + r2.error.message);
+      gn.value = ''; loadLists();
+    });
+    mkRow.appendChild(gn); mkRow.appendChild(mk);
+    gc.appendChild(mkRow);
+    var jnRow = el('div', 'addrow');
+    var jc = el('input'); jc.type = 'text'; jc.placeholder = 'Invite code';
+    jc.setAttribute('autocapitalize', 'none');
+    var jn = el('button', 'btn ghost', 'Join'); jn.type = 'button';
+    jn.addEventListener('click', async function () {
+      var v = jc.value.trim(); if (!v) return;
+      var r2 = await sb.rpc('join_group', { code: v });
+      if (r2.error) chip('Could not join: ' + r2.error.message);
+      else chip('Joined');
+      jc.value = ''; loadLists();
+    });
+    jnRow.appendChild(jc); jnRow.appendChild(jn);
+    gc.appendChild(jnRow);
+    lists.appendChild(gc);
+  }
+  loadLists();
+}
+
+/* ---------- public profile ---------- */
+
+async function renderProfile(username) {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  root.appendChild(wrap);
+  username = decodeURIComponent(username).toLowerCase();
+
+  if (!backendReady()) {
+    if (username === 'paarth') { renderPaarthTemplate(); return; }
+    wrap.appendChild(el('h1', null, 'Not available'));
+    wrap.appendChild(el('div', 'hint', 'The shared backend is not configured yet.'));
+    return;
+  }
+  var p = await sb.from('profiles').select('*').eq('username', username).maybeSingle();
+  if (!p.data) {
+    if (username === 'paarth') { renderPaarthTemplate(); return; }
+    wrap.appendChild(el('div', 'eyebrow', 'Load account'));
+    wrap.appendChild(el('h1', null, 'No such account'));
+    wrap.appendChild(el('div', 'hint', 'Nobody has claimed "' + username + '" yet.'));
+    return;
+  }
+  var prof = p.data;
+  wrap.appendChild(el('div', 'eyebrow', 'The ledger of'));
+  wrap.appendChild(el('h1', null, prof.display_name || prof.username));
+
+  if (signedIn() && prof.id !== session.user.id) {
+    var a = session.user.id < prof.id ? session.user.id : prof.id;
+    var b = session.user.id < prof.id ? prof.id : session.user.id;
+    var fr = await sb.from('friendships').select('*').eq('user_a', a).eq('user_b', b).maybeSingle();
+    var brw = el('div', 'btnrow');
+    if (!fr.data) {
+      var addB = el('button', 'btn ghost', 'Add friend'); addB.type = 'button';
+      addB.addEventListener('click', async function () {
+        await sb.from('friendships').insert({ user_a: a, user_b: b, requested_by: session.user.id, status: 'pending' });
+        addB.textContent = 'Requested'; addB.disabled = true;
+      });
+      brw.appendChild(addB);
+    } else {
+      brw.appendChild(el('span', 'count', fr.data.status === 'accepted' ? 'Friends' : 'Request pending'));
+    }
+    wrap.appendChild(brw);
+  }
+
+  var plans = await sb.from('plans').select('*').eq('owner', prof.id)
+    .order('created_at', { ascending: false });
+  var rows = plans.data || [];
+  if (!rows.length) {
+    wrap.appendChild(el('div', 'card')).appendChild(el('div', 'hint',
+      'Nothing visible here. Their plans are private, or friends-only and you are not friends yet.'));
+    return;
+  }
+  for (var i = 0; i < rows.length; i++) {
+    var planRow = rows[i];
+    var days = {}, weeks = {};
+    var dr = await sb.from('plan_days').select('*').eq('plan_id', planRow.id);
+    (dr.data || []).forEach(function (r) { days[r.day] = r.checks; });
+    var wr = await sb.from('plan_weeks').select('*').eq('plan_id', planRow.id);
+    (wr.data || []).forEach(function (r) { weeks[r.week] = r.checks; });
+    var pobj = planRowToObj(planRow);
+    var head = el('h1', null, pobj.name);
+    head.style.fontSize = '30px'; head.style.marginTop = '18px';
+    head.appendChild(el('span', 'vtag', pobj.visibility));
+    wrap.appendChild(head);
+    if (pobj.intent) wrap.appendChild(el('div', 'sub', pobj.intent));
+    (function (daysM, weeksM, pO) {
+      renderLedger(wrap, {
+        plan: pO, readOnly: true,
+        getDay: function (d) { return daysM[d]; },
+        getWeek: function (w) { return weeksM[w]; },
+        toggleDay: function () {}, toggleWeek: function () {},
+        rerender: function () {}
+      });
+    })(days, weeks, pobj);
+  }
+}
+
+/* ---------- the original (template) ---------- */
+
+function renderPaarthTemplate() {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  wrap.appendChild(el('div', 'eyebrow', 'The original - Aug 25 to Sep 23, 2026'));
+  wrap.appendChild(el('h1', null, PAARTH_PLAN.name));
+  wrap.appendChild(el('div', 'sub', PAARTH_PLAN.intent));
+
+  var card = el('div', 'card'); card.style.marginTop = '24px';
+  card.appendChild(el('h2', null, 'Daily non-negotiables'));
+  PAARTH_PLAN.habits.forEach(function (h) {
+    var b = el('div', 'habit static');
+    b.appendChild(el('span', 'box'));
+    b.appendChild(el('span', 'lbl', h));
+    card.appendChild(b);
+  });
+  wrap.appendChild(card);
+
+  var card2 = el('div', 'card');
+  card2.appendChild(el('h2', null, 'Weekly targets'));
+  var tg = el('div', 'targets');
+  PAARTH_PLAN.targets.forEach(function (t) {
+    var box = el('div', 'tgt');
+    box.appendChild(el('span', 'tl', t[0] + ' x' + t[1]));
+    tg.appendChild(box);
+  });
+  card2.appendChild(tg);
+  var wm = el('div', 'wmeta'); wm.style.marginTop = '12px'; wm.style.marginBottom = '0';
+  wm.appendChild(document.createTextNode('Four escalating weeks: '));
+  wm.appendChild(el('em', null, 'presence, initiation, command, composure'));
+  wm.appendChild(document.createTextNode(' - read alongside: Marcus Aurelius, Seneca, Machiavelli, Dostoevsky.'));
+  card2.appendChild(wm);
+  wrap.appendChild(card2);
+
+  var br = el('div', 'btnrow');
+  var use = el('button', 'btn', 'Use this plan'); use.type = 'button';
+  use.addEventListener('click', async function () {
+    var planObj = JSON.parse(JSON.stringify(PAARTH_PLAN));
+    planObj.visibility = 'friends';
+    if (!(myProfile && myProfile.username === 'paarth')) planObj.startISO = isoToday();
+    if (signedIn()) {
+      if (SP && SP.plan && !confirm('You already have a plan. Create this one as your new active plan?')) return;
+      planObj.visibility = (myProfile && myProfile.username === 'paarth') ? 'public' : 'friends';
+      var ok = await createRemotePlan(planObj);
+      if (!ok) return;
+    } else {
+      if (lsGet(PLAN_KEY) && !confirm('Replace the plan already in this browser?')) return;
+      lsSet(PLAN_KEY, planObj);
+      lsSet(STATE_KEY, { days: {}, weeks: {} });
+    }
+    trackerSel = null;
+    location.hash = '#/track';
+  });
+  var own = el('a', 'btn ghost', 'Build your own'); own.href = '#/new';
+  br.appendChild(use); br.appendChild(own);
+  wrap.appendChild(br);
+
+  var foot = el('div', 'foot');
+  foot.textContent = 'Adopting starts your own thirty days from today with these exact non-negotiables. Building your own takes about two minutes.';
+  wrap.appendChild(foot);
+  root.appendChild(wrap);
+}
+
+/* ---------- settings ---------- */
+
+function renderSettings() {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  wrap.appendChild(el('div', 'eyebrow', 'Account'));
+  wrap.appendChild(el('h1', null, myProfile && myProfile.username ? '@' + myProfile.username : 'Unnamed'));
+  root.appendChild(wrap);
+  if (!signedIn()) {
+    var c0 = el('div', 'card');
+    c0.appendChild(el('div', 'hint', 'Sign in first.'));
+    wrap.appendChild(c0); return;
+  }
+
+  var idc = el('div', 'card');
+  idc.appendChild(el('h2', null, 'Identity'));
+  idc.appendChild(el('div', 'hint',
+    'Your username is your public address: the Load account page and your ledger URL. Lowercase letters, digits, underscores.'));
+  var ar = el('div', 'addrow');
+  var un = el('input'); un.type = 'text'; un.placeholder = 'username';
+  un.value = (myProfile && myProfile.username) || '';
+  un.setAttribute('autocapitalize', 'none');
+  var dn = el('input'); dn.type = 'text'; dn.placeholder = 'Display name';
+  dn.value = (myProfile && myProfile.display_name) || '';
+  var sv = el('button', 'btn', 'Save'); sv.type = 'button';
+  ar.appendChild(un); ar.appendChild(dn); ar.appendChild(sv);
+  idc.appendChild(ar);
+  var imsg = el('div', 'ok', '');
+  idc.appendChild(imsg);
+  sv.addEventListener('click', async function () {
+    var u = un.value.trim().toLowerCase();
+    if (u && !/^[a-z0-9_]{3,20}$/.test(u)) { imsg.textContent = '3-20 chars: a-z, 0-9, underscore.'; return; }
+    var r = await sb.from('profiles').update({ username: u || null, display_name: dn.value.trim() })
+      .eq('id', session.user.id);
+    if (r.error) imsg.textContent = r.error.code === '23505' ? 'That username is taken.' : ('Failed: ' + r.error.message);
+    else { imsg.textContent = 'Saved.'; await loadMyProfile(); renderNav(); }
+  });
+  wrap.appendChild(idc);
+
+  if (SP && SP.plan) {
+    var pc = el('div', 'card');
+    pc.appendChild(el('h2', null, 'Plan visibility'));
+    pc.appendChild(el('div', 'hint', '"' + SP.plan.name + '" is currently ' + SP.plan.visibility + '.'));
+    var sel = el('select');
+    ['private', 'friends', 'public'].forEach(function (v) {
+      var o = el('option', null, v); o.value = v;
+      if (v === SP.plan.visibility) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.addEventListener('change', async function () {
+      var r = await sb.from('plans').update({ visibility: sel.value }).eq('id', SP.plan.id);
+      if (!r.error) { SP.plan.visibility = sel.value; chip('Visibility: ' + sel.value); }
+    });
+    pc.appendChild(sel);
+    var del = el('button', 'btn ghost', 'Delete this plan'); del.type = 'button';
+    del.style.marginTop = '12px';
+    del.addEventListener('click', async function () {
+      if (!confirm('Delete "' + SP.plan.name + '" and all of its thirty days? This cannot be undone.')) return;
+      await sb.from('plans').delete().eq('id', SP.plan.id);
+      SP = null; chip('Deleted'); route();
+    });
+    pc.appendChild(el('div')).appendChild(del);
+    wrap.appendChild(pc);
+  }
+
+  var api = el('div', 'card');
+  api.appendChild(el('h2', null, 'API access'));
+  api.appendChild(el('div', 'hint',
+    'Give this token to your own tools (or your Claude) to read and write your ledger through the REST API. It is your signed session token: treat it like a password. See API.md in the repo for endpoints.'));
+  var show = el('button', 'btn ghost', 'Reveal token'); show.type = 'button';
+  api.appendChild(show);
+  var ta = el('textarea'); ta.style.display = 'none'; ta.style.marginTop = '10px'; ta.readOnly = true;
+  api.appendChild(ta);
+  show.addEventListener('click', async function () {
+    var s = await sb.auth.getSession();
+    ta.value = (s.data.session && s.data.session.access_token) || 'no session';
+    ta.style.display = 'block'; ta.focus(); ta.select();
+  });
+  wrap.appendChild(api);
+
+  var outc = el('div', 'card');
+  var out = el('button', 'btn ghost', 'Sign out'); out.type = 'button';
+  out.addEventListener('click', async function () {
+    await sb.auth.signOut();
+    location.hash = '#/';
+  });
+  outc.appendChild(out);
+  wrap.appendChild(outc);
+}
+
+/* ================= router ================= */
+
+function route() {
+  var h = location.hash || '#/';
+  renderNav();
+  if (h.indexOf('#/u/') === 0) { renderProfile(h.slice(4)); return; }
+  if (h === '#/new') { renderWizard(); return; }
+  if (h === '#/track') { renderTracker(); return; }
+  if (h === '#/feed') { renderFeed(); return; }
+  if (h === '#/people') { renderPeople(); return; }
+  if (h === '#/settings') { renderSettings(); return; }
+  if (h === '#/auth') { renderAuth(); return; }
+  if (h === '#/paarth') { renderPaarthTemplate(); return; }
+  renderLanding();
+}
+
+async function boot() {
+  if (sb) {
+    var s = await sb.auth.getSession();
+    session = s.data.session;
+    sb.auth.onAuthStateChange(function (event, newSession) {
+      var was = !!session;
+      session = newSession;
+      if (!!session !== was) {
+        loadMyProfile().then(loadMyPlan).then(function () {
+          startRealtime(); route();
+        });
+      }
+    });
+    if (session) {
+      await loadMyProfile();
+      await loadMyPlan();
+      startRealtime();
+    }
+  }
+  addEventListener('hashchange', route);
+  route();
+}
+boot();

@@ -1,23 +1,51 @@
 # Metanoia
 
-A 30-day reset tracker. Metanoia: a transformative change of heart and mind; the moment you turn your life around.
+Thirty-day resets you run in public. Metanoia: a transformative change of
+heart and mind; the moment you turn your life around.
 
 Live at https://paarth-r.github.io/metanoia/
 
-## What it does
+## What it is
 
-- Guided walkthrough: name your reset, pick a start date, choose 3-7 daily non-negotiables (suggestions plus custom), and optional weekly targets with per-week counts.
-- 30-day ledger: a daily scorecard of big tappable checkboxes, weekly target pips, streak / perfect-day / average stats, and a 30-cell grid where perfect days fill solid and zero days past show red.
-- A rotating daily quote from Marcus Aurelius, Seneca, and Epictetus.
-- Load account: type an account name on the landing page to open a built-in plan. The original ("paarth", Aug 25 - Sep 23, 2026) ships with the site; adopt it with one click or build your own.
+- A guided walkthrough builds anyone a 30-day plan: name it, pick a start
+  date, choose 3-7 daily non-negotiables, optional weekly targets, and decide
+  who watches (private / friends and groups / public).
+- The ledger: a daily scorecard of big tappable checkboxes, weekly target
+  pips, streak / perfect-day / average stats, and a 30-cell grid where perfect
+  days fill solid and zero days past show red. Rotating quotes from Marcus
+  Aurelius, Seneca, and Epictetus.
+- Social accountability: friends (request/accept), groups (create, join by
+  invite code) where members see each other's friends-tier ledgers, public
+  profile pages at `#/u/<username>`, and a notification-style feed of everyone
+  you follow ticking their days, going perfect, and starting resets - live via
+  Supabase realtime.
+- Privacy tiers per plan: private (owner only), friends (friends + group-mates),
+  public (anyone, signed in or not). Enforced by Postgres row-level security,
+  not client code.
+- Guest mode: with no account the whole tracker still works, stored in
+  localStorage; signing in later imports it.
+- The original plan (the "paarth" account) ships built in and can be adopted
+  by anyone with one click.
 
-## How data works
+## Stack
 
-Visitors' plans and ticks live in their browser's localStorage; nothing is uploaded and there are no accounts. Export produces a JSON blob you can paste into Import on another device. "Start over" erases the plan and all ticks from the browser.
+- Frontend: one static page (index.html + style.css + app.js), vanilla JS, no
+  build step, hosted on GitHub Pages. Fonts: Cormorant Garamond + IBM Plex Mono.
+- Backend: Supabase free tier - magic-link auth (no passwords), Postgres with
+  row-level security (schema in `supabase/schema.sql`), PostgREST API,
+  realtime feed. `config.js` holds the project URL and public anon key.
 
-## Working in public
+## API
 
-The built-in account publishes its progress. The backend is GitHub itself: ticks are written to `data/paarth.json` in this repo through the GitHub Contents API (each tick lands as a commit), and the public account page reads that file and renders a live, read-only ledger with streaks, today's open items, and the 30-day grid. Anyone can watch; only the holder of a fine-grained GitHub token (repo-scoped, Contents read/write, pasted once on the tracker page and kept in localStorage) can write. No servers, no cost.
+See `API.md`. Every table is a REST endpoint; users can hand their session
+token to their own tools or Claude to manage goals programmatically.
+
+## Setup (new deployment)
+
+1. Create a Supabase project.
+2. Run `supabase/schema.sql` in the SQL editor.
+3. Auth -> URL Configuration: set the site URL to your Pages URL.
+4. Fill `config.js` with the project URL and anon key.
 
 ## Rules of the house
 
@@ -25,6 +53,7 @@ The built-in account publishes its progress. The backend is GitHub itself: ticks
 2. Done before dopamine.
 3. The scorecard is the verdict on the day, not your feelings.
 
-## Stack
+## Roadmap
 
-One static `index.html`: vanilla JS, no build step, no dependencies beyond Google Fonts (Cormorant Garamond and IBM Plex Mono). Light and dark themes follow the system, hash-based routing (`#/`, `#/new`, `#/track`, `#/paarth`). Hosted on GitHub Pages.
+- Web push notifications for feed events (currently in-app feed + badge).
+- Native mobile app wrapping the same API.
