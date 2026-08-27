@@ -66,3 +66,24 @@ begin
   if not public.are_friends(auth.uid(), fid) then raise exception 'you can only add accepted friends'; end if;
   insert into group_members (group_id, user_id) values (gid, fid) on conflict do nothing;
 end $$;
+
+-- Hardening (applied 2026-08-26): storage writes restricted to the caller's
+-- own groups; column-level update grants so members cannot reassign group
+-- ownership or rewrite friendship rows beyond accepting.
+create or replace function public.can_write_group_image(objname text, uid uuid)
+returns boolean language plpgsql stable security definer set search_path = public as $$
+declare gid uuid;
+begin
+  begin gid := (split_part(objname, '.', 1))::uuid; exception when others then return false; end;
+  return public.is_group_member(gid, uid);
+end $$;
+drop policy if exists gi_insert on storage.objects;
+create policy gi_insert on storage.objects for insert
+  with check (bucket_id = 'group-images' and public.can_write_group_image(name, auth.uid()));
+drop policy if exists gi_update on storage.objects;
+create policy gi_update on storage.objects for update
+  using (bucket_id = 'group-images' and public.can_write_group_image(name, auth.uid()));
+revoke update on table public.groups from authenticated;
+grant update (name, image_url) on table public.groups to authenticated;
+revoke update on table public.friendships from authenticated;
+grant update (status) on table public.friendships to authenticated;
