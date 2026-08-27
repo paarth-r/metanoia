@@ -533,9 +533,11 @@ export default function App() {
       .order('created_at', { ascending: false }).limit(1).maybeSingle();
     if (!p.data) { setSP(null); return; }
     const days = {}, weeks = {};
-    const dr = await sb.from('plan_days').select('*').eq('plan_id', p.data.id);
+    const [dr, wr] = await Promise.all([
+      sb.from('plan_days').select('*').eq('plan_id', p.data.id),
+      sb.from('plan_weeks').select('*').eq('plan_id', p.data.id),
+    ]);
     (dr.data || []).forEach((r) => { days[r.day] = r.checks; });
-    const wr = await sb.from('plan_weeks').select('*').eq('plan_id', p.data.id);
     (wr.data || []).forEach((r) => { weeks[r.week] = r.checks; });
     setSP({ plan: p.data, days, weeks });
   }, []);
@@ -546,8 +548,10 @@ export default function App() {
       Promise.all([loadProfile(data.session), loadPlan(data.session)]).then(() => setBooted(true));
     });
     const { data: sub } = sb.auth.onAuthStateChange((_e, s) => {
+      const wasSignedOut = !sessionRef.current;
       setSession(s);
       loadProfile(s); loadPlan(s);
+      if (s && wasSignedOut) { setTab('ledger'); setViewUser(null); }
     });
     return () => sub.subscription.unsubscribe();
   }, [loadProfile, loadPlan]);
@@ -668,7 +672,7 @@ export default function App() {
     return true;
   };
 
-  if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: LIGHT.bg }} />;
+  if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: c.bg }} />;
 
   const shell = (content) => (
     <SafeAreaView style={{ flex: 1, backgroundColor: c.bg }}>
@@ -1535,15 +1539,16 @@ function ProfileScreen({ c, username, me, onBack, say }) {
       setProf(p.data || null);
       if (!p.data) return;
       const pl = await sb.from('plans').select('*').eq('owner', p.data.id).order('created_at', { ascending: false });
-      const out = [];
-      for (const row of pl.data || []) {
+      const out = await Promise.all((pl.data || []).map(async (row) => {
         const days = {}, weeks = {};
-        const dr = await sb.from('plan_days').select('*').eq('plan_id', row.id);
+        const [dr, wr] = await Promise.all([
+          sb.from('plan_days').select('*').eq('plan_id', row.id),
+          sb.from('plan_weeks').select('*').eq('plan_id', row.id),
+        ]);
         (dr.data || []).forEach((r) => { days[r.day] = r.checks; });
-        const wr = await sb.from('plan_weeks').select('*').eq('plan_id', row.id);
         (wr.data || []).forEach((r) => { weeks[r.week] = r.checks; });
-        out.push({ row, days, weeks });
-      }
+        return { row, days, weeks };
+      }));
       setPlans(out);
       if (p.data.id !== me) {
         const a = me < p.data.id ? me : p.data.id;
@@ -1613,6 +1618,12 @@ function AccountScreen({ c, profile, SP, setSP, onProfileSaved, say }) {
   const [display, setDisplay] = useState(profile?.display_name || '');
   const [token, setToken] = useState('');
   const [newPw, setNewPw] = useState('');
+  // profile loads async after sign-in; useState initializers only run on first
+  // mount, so re-seed the fields whenever the profile actually arrives.
+  useEffect(() => {
+    setUsername(profile?.username || '');
+    setDisplay(profile?.display_name || '');
+  }, [profile]);
 
   return (
     <ScrollView contentContainerStyle={{ padding: 18, paddingTop: 24, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
