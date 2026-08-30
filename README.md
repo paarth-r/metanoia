@@ -19,6 +19,17 @@ Live at https://paarth-r.github.io/metanoia/
   profile pages at `#/u/<username>`, and a notification-style feed of everyone
   you follow ticking their days, going perfect, and starting resets - live via
   Supabase realtime.
+- Every group is a page (`#/g/<id>` on the web, a screen in the app) with four
+  sections: a feed filtered to members, a realtime private chat, a member list
+  that links to each ledger and can pull in a friend directly, and settings for
+  the group image, invite code, and silencing.
+- The feed carries reactions (respect / locked in / soft), filter pills for All,
+  Friends, and each group, and per-group silencing that hides those members
+  unless they reach you another way.
+- The ledger can grow but never shrink: commit a new daily non-negotiable (up to
+  seven) or weekly target (up to eight) mid-reset, behind a two-step confirm
+  that says plainly you will see it for the next thirty days and cannot remove
+  it. Days you already ticked keep their scores.
 - Privacy tiers per plan: private (owner only), friends (friends + group-mates),
   public (anyone, signed in or not). Enforced by Postgres row-level security,
   not client code.
@@ -66,9 +77,10 @@ Two tiers, same backend:
 - **PWA**: the site installs from the browser (iPhone: Safari -> Share -> Add
   to Home Screen; Android: Chrome offers Install). Manifest, icons, and a
   network-first service worker; API traffic is never cached.
-- **Native app**: `mobile/` is a React Native app on Expo SDK 57. Same design
-  system (Cormorant Garamond + IBM Plex Mono, bone/ink, automatic dark mode),
-  same features: email-code sign-in (no passwords, no deep links), the
+- **Native app**: `mobile/` is a React Native app on Expo SDK 57. The site and
+  the app are at feature parity - anything you can do on one you can do on the
+  other. Same design system (Cormorant Garamond + IBM Plex Mono, bone/ink,
+  automatic dark mode), same features: email-code sign-in (no passwords, no deep links), the
   editable ledger, the five-step wizard, the realtime feed with unread badge,
   friends, groups, public profiles, and account settings including the API
   token. Run it with `cd mobile && npx expo start` and scan the QR with Expo

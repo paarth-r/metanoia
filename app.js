@@ -946,6 +946,10 @@ function renderTracker() {
 
   renderLedger(wrap, ctx);
 
+  if (!ctx.readOnly) {
+    wrap.appendChild(commitCard(function () { trackerSel = ctx.sel; renderTracker(); }));
+  }
+
   if (!signedIn() && backendReady()) {
     var up = el('div', 'card');
     up.appendChild(el('h2', null, 'Guest mode'));
@@ -960,6 +964,120 @@ function renderTracker() {
   foot.textContent = 'Never miss twice. Done before dopamine. The scorecard is the verdict on the day, not your feelings.';
   wrap.appendChild(foot);
   root.appendChild(wrap);
+}
+
+/* ---------- committing to more, permanently ---------- */
+
+var COMMIT_WARNING = 'Be careful: once you commit to something, you will see it '
+  + 'for the next thirty days and cannot remove it.';
+
+/* Works signed in (the plans row) and in guest mode (localStorage), so the
+   commitment means the same thing either way. */
+async function addHabitWeb(label) {
+  if (signedIn() && SP && SP.plan) {
+    if (SP.plan.habits.length >= 7) { chip('Seven is the cap. Discipline is subtraction.'); return false; }
+    var habits = SP.plan.habits.concat([label]);
+    var r = await sb.from('plans').update({ habits: habits }).eq('id', SP.plan.id);
+    if (r.error) { chip('Could not commit.'); return false; }
+    SP.plan.habits = habits;
+    chip('Committed. Thirty days.');
+    return true;
+  }
+  var lp = lsGet(PLAN_KEY);
+  if (!lp) return false;
+  if (lp.habits.length >= 7) { chip('Seven is the cap. Discipline is subtraction.'); return false; }
+  lp.habits = lp.habits.concat([label]);
+  lsSet(PLAN_KEY, lp);
+  chip('Committed. Thirty days.');
+  return true;
+}
+
+async function addTargetWeb(label, count) {
+  if (signedIn() && SP && SP.plan) {
+    var cur = SP.plan.targets || [];
+    if (cur.length >= 8) { chip('Eight targets is the cap.'); return false; }
+    var targets = cur.concat([[label, count]]);
+    var r = await sb.from('plans').update({ targets: targets }).eq('id', SP.plan.id);
+    if (r.error) { chip('Could not commit.'); return false; }
+    SP.plan.targets = targets;
+    chip('Committed. Thirty days.');
+    return true;
+  }
+  var lp = lsGet(PLAN_KEY);
+  if (!lp) return false;
+  var cur2 = lp.targets || [];
+  if (cur2.length >= 8) { chip('Eight targets is the cap.'); return false; }
+  lp.targets = cur2.concat([[label, count]]);
+  lsSet(PLAN_KEY, lp);
+  chip('Committed. Thirty days.');
+  return true;
+}
+
+/* Two steps on purpose: naming it is not committing to it. */
+function commitCard(onDone) {
+  var card = el('div', 'card');
+  card.appendChild(el('h2', null, 'Commit more'));
+  card.appendChild(el('div', 'hint', COMMIT_WARNING));
+  var host = el('div');
+  card.appendChild(host);
+
+  function idle() {
+    host.textContent = '';
+    var row = el('div', 'btnrow');
+    [['habit', 'New non-negotiable'], ['target', 'New weekly target']].forEach(function (k) {
+      var b = el('button', 'btn ghost small', k[1]);
+      b.type = 'button';
+      b.addEventListener('click', function () { form(k[0]); });
+      row.appendChild(b);
+    });
+    host.appendChild(row);
+  }
+
+  function form(kind) {
+    host.textContent = '';
+    var ar = el('div', 'addrow');
+    var input = el('input'); input.type = 'text'; input.maxLength = 40;
+    input.placeholder = kind === 'habit' ? 'The daily action' : 'The weekly target';
+    ar.appendChild(input);
+    var cnt = null;
+    if (kind === 'target') {
+      cnt = el('input'); cnt.type = 'number'; cnt.min = '1'; cnt.max = '7'; cnt.value = '2';
+      cnt.style.maxWidth = '70px';
+      ar.appendChild(cnt);
+    }
+    var go = el('button', 'btn', 'Commit'); go.type = 'button';
+    var no = el('button', 'btn ghost', 'Cancel'); no.type = 'button';
+    ar.appendChild(go); ar.appendChild(no);
+    host.appendChild(ar);
+    no.addEventListener('click', idle);
+    input.focus();
+
+    var ask = function () {
+      var label = input.value.trim();
+      if (!label) return;
+      var n = cnt ? Math.max(1, Math.min(7, parseInt(cnt.value, 10) || 1)) : 0;
+      host.textContent = '';
+      host.appendChild(el('div', 'hint', COMMIT_WARNING + '  ' + (kind === 'habit'
+        ? '"' + label + '" joins your daily non-negotiables.'
+        : '"' + label + ' x' + n + '" joins your weekly targets.')));
+      var row2 = el('div', 'btnrow');
+      var yes = el('button', 'btn', 'Commit for thirty days'); yes.type = 'button';
+      var back = el('button', 'btn ghost', 'Not yet'); back.type = 'button';
+      row2.appendChild(yes); row2.appendChild(back);
+      host.appendChild(row2);
+      back.addEventListener('click', idle);
+      yes.addEventListener('click', async function () {
+        yes.disabled = true;
+        var ok = kind === 'habit' ? await addHabitWeb(label) : await addTargetWeb(label, n);
+        if (ok) onDone(); else idle();
+      });
+    };
+    go.addEventListener('click', ask);
+    input.addEventListener('keydown', function (e) { if (e.key === 'Enter') ask(); });
+  }
+
+  idle();
+  return card;
 }
 
 async function importLocal() {
