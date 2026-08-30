@@ -56,7 +56,9 @@ Live at https://paarth-r.github.io/metanoia/
   recurrence logic; because there is no bundler and Metro cannot reach outside
   `mobile/`, `mobile/todos-core.js` carries a byte-identical copy of its shared
   region and `npm test` fails if the two drift. Fonts: Cormorant Garamond + IBM Plex Mono.
-- Backend: Supabase free tier - magic-link auth (no passwords), Postgres with
+- Backend: Supabase free tier - email + password auth with no email
+  confirmation step (you sign up and you are in; password reset still goes by
+  email, which is rare enough for the built-in mailer), Postgres with
   row-level security (schema in `supabase/schema.sql`), PostgREST API,
   realtime feed. `config.js` holds the project URL and public anon key.
 

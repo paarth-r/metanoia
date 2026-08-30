@@ -330,7 +330,7 @@ function AuthScreen({ c }) {
       setMsg('Signing in...');
       const r = await sb.auth.signInWithPassword({ email: v, password });
       if (r.error) setMsg(/confirm/i.test(r.error.message)
-        ? 'Email not confirmed yet. Click the link in your confirmation email first.'
+        ? 'This account predates confirmation being turned off. Check your email for the link, or reset your password.'
         : `Could not sign in: ${r.error.message}`);
     } else if (mode === 'signup') {
       if (password.length < 8) { setMsg('Password needs 8+ characters.'); setBusy(false); return; }
@@ -348,8 +348,14 @@ function AuthScreen({ c }) {
         email: v, password,
         options: { emailRedirectTo: SITE, data: { username: u, display_name: d } },
       });
-      setMsg(r.error ? `Could not create: ${r.error.message}`
-        : `Account created as @${u}. Tap the link in your confirmation email, then sign in here.`);
+      /* With email confirmation off, signUp returns a session and
+         onAuthStateChange drops us straight into the app - no message needed,
+         this screen is about to unmount. Handle both so flipping that setting
+         never leaves the client saying the wrong thing. */
+      if (r.error) setMsg(`Could not create: ${r.error.message}`);
+      else if (!r.data?.session) {
+        setMsg(`Account created as @${u}. Tap the link in your confirmation email, then sign in here.`);
+      }
     } else {
       setMsg('Sending...');
       const r = await sb.auth.resetPasswordForEmail(v, { redirectTo: SITE });
@@ -370,7 +376,7 @@ function AuthScreen({ c }) {
         <H2 c={c}>{mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Reset password' : 'Sign in'}</H2>
         <Hint c={c}>
           {mode === 'signup'
-            ? 'Pick the name people will see. One confirmation email, then you sign in with your password.'
+            ? 'Username, display name, email, password. You are in straight away.'
             : mode === 'forgot'
               ? 'We email a reset link; it opens the website to set a new password.'
               : 'Email and password.'}

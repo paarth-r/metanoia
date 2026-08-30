@@ -491,7 +491,7 @@ function renderAuth() {
     wrap.appendChild(card); root.appendChild(wrap); return;
   }
   var hint = authMode === 'signup'
-    ? 'Pick the name people will see. You get one confirmation email; click its link, then sign in.'
+    ? 'Username, display name, email, password. You are in straight away.'
     : authMode === 'forgot'
       ? 'We email you a reset link. Open it here and set a new password.'
       : 'Email and password.';
@@ -533,7 +533,7 @@ function renderAuth() {
       msg.textContent = 'Signing in...';
       var r = await sb.auth.signInWithPassword({ email: v, password: pw.value });
       if (r.error) msg.textContent = /confirm/i.test(r.error.message)
-        ? 'Email not confirmed yet. Click the link in your confirmation email first.'
+        ? 'This account was made before confirmation was turned off. Check your email for the link, or reset your password.'
         : 'Could not sign in: ' + r.error.message;
       else location.hash = '#/track';
     } else if (authMode === 'signup') {
@@ -555,8 +555,21 @@ function renderAuth() {
           data: { username: u, display_name: dnv }
         }
       });
-      msg.textContent = r2.error ? ('Could not create: ' + r2.error.message)
-        : 'Account created as @' + u + '. Check your email for the confirmation link, then sign in.';
+      if (r2.error) { msg.textContent = 'Could not create: ' + r2.error.message; return; }
+      /* With email confirmation off, signUp returns a session and the account
+         is usable immediately. Handle both, so flipping that setting in the
+         dashboard never leaves the client saying the wrong thing. */
+      if (r2.data && r2.data.session) {
+        msg.textContent = 'Welcome, @' + u;
+        session = r2.data.session;
+        await loadMyProfile();
+        await loadMyPlan();
+        location.hash = '#/track';
+        route();
+      } else {
+        msg.textContent = 'Account created as @' + u
+          + '. Check your email for the confirmation link, then sign in.';
+      }
     } else {
       msg.textContent = 'Sending...';
       var r3 = await sb.auth.resetPasswordForEmail(v, {
