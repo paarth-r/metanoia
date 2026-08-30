@@ -462,29 +462,7 @@ function renderLanding() {
       br.appendChild(bg);
     }
   }
-  var b2 = el('button', 'btn ghost', 'Load account'); b2.type = 'button';
-  br.appendChild(b2);
   wrap.appendChild(br);
-
-  var acct = el('div', 'io');
-  var ar = el('div', 'addrow'); ar.style.marginTop = '14px';
-  var nameIn = el('input');
-  nameIn.type = 'text'; nameIn.placeholder = 'Username'; nameIn.maxLength = 30;
-  nameIn.setAttribute('autocapitalize', 'none');
-  var goB = el('button', 'btn', 'Open'); goB.type = 'button';
-  ar.appendChild(nameIn); ar.appendChild(goB);
-  acct.appendChild(ar);
-  wrap.appendChild(acct);
-  b2.addEventListener('click', function () {
-    acct.classList.toggle('open');
-    if (acct.classList.contains('open')) nameIn.focus();
-  });
-  function openAccount() {
-    var v = nameIn.value.trim().toLowerCase();
-    if (v) location.hash = '#/u/' + encodeURIComponent(v);
-  }
-  goB.addEventListener('click', openAccount);
-  nameIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); openAccount(); } });
 
   var q = QUOTES[new Date().getDate() % QUOTES.length];
   wrap.appendChild(el('div', 'quote', '"' + q[0] + '"'));
@@ -2087,7 +2065,7 @@ async function renderProfile(username) {
   var p = await sb.from('profiles').select('*').eq('username', username).maybeSingle();
   if (!p.data) {
     if (username === 'paarth') { renderPaarthTemplate(); return; }
-    wrap.appendChild(el('div', 'eyebrow', 'Load account'));
+    wrap.appendChild(el('div', 'eyebrow', 'The ledger of'));
     wrap.appendChild(el('h1', null, 'No such account'));
     wrap.appendChild(el('div', 'hint', 'Nobody has claimed "' + username + '" yet.'));
     return;
@@ -2230,7 +2208,7 @@ function renderSettings() {
   var idc = el('div', 'card');
   idc.appendChild(el('h2', null, 'Identity'));
   idc.appendChild(el('div', 'hint',
-    'Your username is your public address: the Load account page and your ledger URL. Lowercase letters, digits, underscores.'));
+    'Your username is your public address: it is how friends find you, and your ledger lives at #/u/<username>. Lowercase letters, digits, underscores.'));
   var ar = el('div', 'addrow');
   var un = el('input'); un.type = 'text'; un.placeholder = 'username';
   un.value = (myProfile && myProfile.username) || '';

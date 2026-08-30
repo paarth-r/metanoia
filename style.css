@@ -134,9 +134,6 @@ input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px soli
 .err{font-size:12px;color:var(--danger);margin-bottom:10px}
 .ok{font-size:12px;color:var(--muted);margin-bottom:10px}
 .navrow{display:flex;justify-content:space-between;margin-top:24px;gap:10px}
-.io{display:none;margin-top:12px}
-.io.open{display:block}
-.io textarea{height:90px;font-size:11px}
 
 /* feed */
 .feeditem{display:flex;gap:12px;padding:13px 2px;border-bottom:1px solid var(--line-soft);align-items:flex-start}
