@@ -230,3 +230,44 @@ input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px soli
 
 .invcode{font-family:"Cormorant Garamond",Georgia,serif;font-size:32px;letter-spacing:.16em;
   cursor:pointer;margin:2px 0 4px}
+
+/* ---------- days: calendar ---------- */
+
+.calhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.calmonth{font-family:"Cormorant Garamond",Georgia,serif;font-size:24px}
+.calnav{font:inherit;font-size:14px;background:none;border:1.5px solid var(--line);
+  color:var(--muted);width:34px;height:34px;border-radius:50%;cursor:pointer;line-height:1}
+.calnav:hover{color:var(--ink);border-color:var(--gold)}
+.calnav:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.calgrid.dow{margin-bottom:6px}
+.calgrid.dow span{text-align:center;font-size:10px;letter-spacing:.14em;color:var(--muted)}
+.calcell{position:relative;aspect-ratio:1;font:inherit;background:none;cursor:pointer;
+  border:1px solid var(--line-soft);border-radius:4px;color:var(--ink);
+  display:flex;align-items:center;justify-content:center;padding:0}
+.calcell .cd{font-family:"Cormorant Garamond",Georgia,serif;font-size:16px;
+  font-variant-numeric:tabular-nums}
+.calcell.out{opacity:.28}
+.calcell.full{background:var(--leather);border-color:var(--leather);color:var(--on-leather)}
+.calcell.zero{border-color:var(--danger)}
+.calcell.zero .cd{color:var(--danger)}
+.calcell.today{border-color:var(--gold)}
+.calcell.sel{outline:2px solid var(--ink);outline-offset:-2px}
+.calcell .dot{position:absolute;bottom:5px;left:50%;transform:translateX(-50%);
+  width:4px;height:4px;border-radius:50%;background:var(--gold)}
+.calcell.full .dot{background:var(--on-leather)}
+.calcell:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+
+.seclbl{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);
+  margin:18px 0 4px}
+.seclbl:first-of-type{margin-top:10px}
+.todorow{display:flex;align-items:center;gap:6px;border-top:1px solid var(--line-soft)}
+.todorow .habit{border-top:none;flex:1}
+.todorow .xb{font:inherit;background:none;border:none;color:var(--muted);cursor:pointer;
+  font-size:11px;padding:6px 4px}
+.todorow .xb:hover{color:var(--danger)}
+.rep{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
+  border:1px solid var(--line);border-radius:999px;padding:1px 6px;margin-left:8px}
+.repline{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;
+  color:var(--muted);cursor:pointer}
+.repline input{width:auto;margin:0}

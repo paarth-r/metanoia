@@ -413,7 +413,7 @@ function renderNav() {
   var links = needsClaim()
     ? []
     : signedIn()
-      ? [['#/track', 'Ledger'], ['#/feed', 'Feed'], ['#/people', 'Social'], ['#/settings', 'Account']]
+      ? [['#/track', 'Ledger'], ['#/days', 'Days'], ['#/feed', 'Feed'], ['#/people', 'Social'], ['#/settings', 'Account']]
       : (backendReady() ? [['#/auth', 'Sign in']] : []);
   var cur = location.hash || '#/';
   links.forEach(function (l) {
@@ -1102,6 +1102,313 @@ async function importLocal() {
   lsDel(PLAN_KEY); lsDel(STATE_KEY);
   chip('Guest ledger imported');
   renderTracker();
+}
+
+/* ---------- days: a real calendar of non-negotiables and todos ---------- */
+
+/* Todos live on real dates, outside any 30-day plan. Cache is per-load;
+   the month grid needs every todo anyway (a repeat has no end date). */
+var TODOS = null;    // rows from public.todos
+var TICKS = null;    // rows from public.todo_ticks
+var daysSel = null;  // selected ISO date
+var daysMonth = null;// {y, m} being shown
+
+var GUEST_TODOS_KEY = 'metanoia_todos_v1';
+var GUEST_TICKS_KEY = 'metanoia_ticks_v1';
+
+function todosLocal() { return lsGet(GUEST_TODOS_KEY) || []; }
+function ticksLocal() { return lsGet(GUEST_TICKS_KEY) || []; }
+
+async function loadTodos() {
+  if (!signedIn()) { TODOS = todosLocal(); TICKS = ticksLocal(); return; }
+  var r = await Promise.all([
+    sb.from('todos').select('*').order('created_at'),
+    sb.from('todo_ticks').select('*')
+  ]);
+  /* Table not migrated yet: fail visibly in one place, not on every tick. */
+  TODOS = r[0].error ? null : (r[0].data || []);
+  TICKS = r[1].error ? [] : (r[1].data || []);
+}
+
+async function addTodo(body, repeats, iso) {
+  var row = repeats
+    ? { body: body, repeats: true, starts_on: iso, on_date: null, ends_on: null }
+    : { body: body, repeats: false, on_date: iso, starts_on: null, ends_on: null };
+  if (!signedIn()) {
+    row.id = 'g' + Date.now() + Math.floor(Math.random() * 1000);
+    row.created_at = new Date().toISOString();
+    var list = todosLocal(); list.push(row); lsSet(GUEST_TODOS_KEY, list);
+    TODOS = list;
+    return true;
+  }
+  row.owner = session.user.id;
+  var r = await sb.from('todos').insert(row).select().single();
+  if (r.error) { chip('Could not add that.'); return false; }
+  TODOS.push(r.data);
+  return true;
+}
+
+async function setTodoTick(todoId, iso, done) {
+  if (!signedIn()) {
+    var list = ticksLocal().filter(function (t) {
+      return !(t.todo_id === todoId && t.on_date === iso);
+    });
+    if (done) list.push({ todo_id: todoId, on_date: iso });
+    lsSet(GUEST_TICKS_KEY, list);
+    TICKS = list;
+    return;
+  }
+  if (done) {
+    var r = await sb.from('todo_ticks').upsert(
+      { todo_id: todoId, on_date: iso, updated_at: new Date().toISOString() },
+      { onConflict: 'todo_id,on_date' });
+    if (r.error) { chip('Could not save that tick.'); return; }
+    TICKS.push({ todo_id: todoId, on_date: iso });
+  } else {
+    var r2 = await sb.from('todo_ticks').delete().eq('todo_id', todoId).eq('on_date', iso);
+    if (r2.error) { chip('Could not clear that tick.'); return; }
+    TICKS = TICKS.filter(function (t) { return !(t.todo_id === todoId && t.on_date === iso); });
+  }
+}
+
+/* Deleting a repeat that has history ends it instead of erasing it: the days
+   you already earned keep their record. A repeat nobody ever ticked (a typo)
+   and any one-off go for good. */
+async function removeTodo(todo, iso) {
+  var hasHistory = todo.repeats && TICKS.some(function (t) { return t.todo_id === todo.id; });
+  if (hasHistory) {
+    var endsOn = TodoCore.endDateForStop(todo.id, TICKS, iso);
+    if (!signedIn()) {
+      var list = todosLocal().map(function (t) {
+        return t.id === todo.id ? Object.assign({}, t, { ends_on: endsOn }) : t;
+      });
+      lsSet(GUEST_TODOS_KEY, list); TODOS = list;
+      return;
+    }
+    var r = await sb.from('todos').update({ ends_on: endsOn }).eq('id', todo.id);
+    if (r.error) { chip('Could not stop that.'); return; }
+    TODOS.forEach(function (t) { if (t.id === todo.id) t.ends_on = endsOn; });
+    chip('Stopped. The days you ticked keep it.');
+    return;
+  }
+  if (!signedIn()) {
+    lsSet(GUEST_TODOS_KEY, todosLocal().filter(function (t) { return t.id !== todo.id; }));
+    lsSet(GUEST_TICKS_KEY, ticksLocal().filter(function (t) { return t.todo_id !== todo.id; }));
+    TODOS = todosLocal(); TICKS = ticksLocal();
+    return;
+  }
+  var r2 = await sb.from('todos').delete().eq('id', todo.id);
+  if (r2.error) { chip('Could not delete that.'); return; }
+  TODOS = TODOS.filter(function (t) { return t.id !== todo.id; });
+  TICKS = TICKS.filter(function (t) { return t.todo_id !== todo.id; });
+}
+
+/* window.TodoCore is loaded by index.html before this script. */
+function shiftIsoW(iso, n) { return TodoCore.shiftIso(iso, n); }
+
+function activePlanForDays() {
+  if (signedIn() && SP && SP.plan) return planRowToObj(SP.plan);
+  return lsGet(PLAN_KEY) || null;
+}
+function planChecksFor(dayNum) {
+  if (signedIn() && SP) return SP.days[dayNum];
+  var st = lsGet(STATE_KEY) || { days: {} };
+  return st.days[dayNum];
+}
+
+async function renderDays() {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  wrap.appendChild(el('div', 'eyebrow', 'Every day, on the record'));
+  wrap.appendChild(el('h1', null, 'Days'));
+  root.appendChild(wrap);
+
+  if (TODOS === null || TODOS === undefined) await loadTodos();
+  if (TODOS === null) {
+    var warn = el('div', 'card');
+    warn.appendChild(el('div', 'hint',
+      'Todos are not set up on the backend yet. Run supabase/migration-2026-08-29-todos.sql '
+      + 'in the SQL editor, then reload.'));
+    wrap.appendChild(warn);
+    return;
+  }
+
+  var today = TodoCore.isoTodayLocal();
+  if (!daysSel) daysSel = today;
+  if (!daysMonth) {
+    var d0 = TodoCore.parseIsoLocal(daysSel);
+    daysMonth = { y: d0.getFullYear(), m: d0.getMonth() };
+  }
+  var plan = activePlanForDays();
+
+  /* ----- month grid ----- */
+  var cal = el('div', 'card');
+  var chead = el('div', 'calhead');
+  var prev = el('button', 'calnav', '<'); prev.type = 'button';
+  var next = el('button', 'calnav', '>'); next.type = 'button';
+  prev.addEventListener('click', function () {
+    daysMonth = daysMonth.m === 0 ? { y: daysMonth.y - 1, m: 11 } : { y: daysMonth.y, m: daysMonth.m - 1 };
+    renderDays();
+  });
+  next.addEventListener('click', function () {
+    daysMonth = daysMonth.m === 11 ? { y: daysMonth.y + 1, m: 0 } : { y: daysMonth.y, m: daysMonth.m + 1 };
+    renderDays();
+  });
+  chead.appendChild(prev);
+  chead.appendChild(el('span', 'calmonth', TodoCore.monthLabel(daysMonth.y, daysMonth.m)));
+  chead.appendChild(next);
+  cal.appendChild(chead);
+
+  var dow = el('div', 'calgrid dow');
+  TodoCore.WEEKDAYS.forEach(function (w) { dow.appendChild(el('span', null, w)); });
+  cal.appendChild(dow);
+
+  var grid = el('div', 'calgrid');
+  TodoCore.monthGrid(daysMonth.y, daysMonth.m).forEach(function (cell) {
+    var b = el('button', 'calcell'); b.type = 'button';
+    if (!cell.inMonth) b.className += ' out';
+    if (cell.iso === today) b.className += ' today';
+    if (cell.iso === daysSel) b.className += ' sel';
+    b.appendChild(el('span', 'cd', String(cell.day)));
+
+    /* Ledger colouring for dates inside the reset, exactly as the grid does. */
+    var pd = plan ? TodoCore.planDayOf(plan.startISO, cell.iso) : null;
+    if (pd) {
+      var nH = plan.habits.length;
+      var sc = scoreOf(planChecksFor(pd), nH);
+      if (sc === nH) b.className += ' full';
+      else if (sc === 0 && cell.iso < today) b.className += ' zero';
+    }
+    if (TodoCore.dayHasMark(TODOS, TICKS, cell.iso, today)) b.appendChild(el('i', 'dot'));
+    b.addEventListener('click', function () { daysSel = cell.iso; renderDays(); });
+    grid.appendChild(b);
+  });
+  cal.appendChild(grid);
+  wrap.appendChild(cal);
+
+  /* ----- the selected day ----- */
+  var selDate = TodoCore.parseIsoLocal(daysSel);
+  var D = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  var card = el('div', 'card');
+  var dh = el('div', 'dayhead');
+  dh.appendChild(el('span', 'dn', D[selDate.getDay()] + ' '
+    + TodoCore.MONTH_NAMES[selDate.getMonth()].slice(0, 3) + ' ' + selDate.getDate()));
+  var counts = TodoCore.todoCountsForDate(TODOS, TICKS, daysSel);
+  var planDay = plan ? TodoCore.planDayOf(plan.startISO, daysSel) : null;
+  var right = daysSel === today ? 'today' : (daysSel > today ? 'ahead' : 'past');
+  dh.appendChild(el('span', 'dd', right));
+  card.appendChild(dh);
+
+  var future = daysSel > today;
+
+  if (planDay) {
+    card.appendChild(el('div', 'seclbl', 'Non-negotiables - day ' + planDay + ' of 30'));
+    var nH = plan.habits.length;
+    var arr = planChecksFor(planDay) || [];
+    plan.habits.forEach(function (label, i) {
+      var on = !!arr[i];
+      var b = el('button', 'habit' + (on ? ' on' : ''));
+      b.type = 'button';
+      b.disabled = future;
+      b.appendChild(el('span', 'box'));
+      b.appendChild(el('span', 'lbl', label));
+      if (!future) {
+        b.addEventListener('click', async function () {
+          await toggleHabitOnDay(planDay, i, plan);
+          renderDays();
+        });
+      }
+      card.appendChild(b);
+    });
+    card.appendChild(el('div', 'scoreline', scoreOf(arr, nH) + ' / ' + nH));
+  }
+
+  card.appendChild(el('div', 'seclbl',
+    'Todos' + (counts.total ? '  ' + counts.done + ' / ' + counts.total : '')));
+  var list = TodoCore.resolveTodosForDate(TODOS, TICKS, daysSel);
+  if (!list.length) {
+    card.appendChild(el('div', 'hint', 'Nothing on the books for this day.'));
+  }
+  list.forEach(function (t) {
+    var rowE = el('div', 'todorow');
+    var b = el('button', 'habit' + (t.done ? ' on' : ''));
+    b.type = 'button';
+    b.disabled = future;
+    b.appendChild(el('span', 'box'));
+    var lbl = el('span', 'lbl', t.body);
+    if (t.repeats) lbl.appendChild(el('span', 'rep', 'daily'));
+    b.appendChild(lbl);
+    if (!future) {
+      b.addEventListener('click', async function () {
+        await setTodoTick(t.id, daysSel, !t.done);
+        renderDays();
+      });
+    }
+    rowE.appendChild(b);
+    var x = el('button', 'xb', 'delete'); x.type = 'button';
+    x.addEventListener('click', async function () {
+      var full = TODOS.filter(function (r) { return r.id === t.id; })[0];
+      if (!full) return;
+      var hist = full.repeats && TICKS.some(function (k) { return k.todo_id === full.id; });
+      var q = hist
+        ? 'Stop "' + t.body + '" from here on? The days you already ticked keep it.'
+        : 'Delete "' + t.body + '"?';
+      if (!confirm(q)) return;
+      await removeTodo(full, daysSel);
+      renderDays();
+    });
+    rowE.appendChild(x);
+    card.appendChild(rowE);
+  });
+
+  /* ----- add ----- */
+  var addRow = el('div', 'addrow'); addRow.style.marginTop = '14px';
+  var ti = el('input'); ti.type = 'text'; ti.maxLength = 120;
+  ti.placeholder = 'Add a todo for this day';
+  var addB = el('button', 'btn', 'Add'); addB.type = 'button';
+  addRow.appendChild(ti); addRow.appendChild(addB);
+  card.appendChild(addRow);
+
+  var repWrap = el('label', 'repline');
+  var rep = el('input'); rep.type = 'checkbox';
+  repWrap.appendChild(rep);
+  repWrap.appendChild(el('span', null, 'Repeat every day from here'));
+  card.appendChild(repWrap);
+
+  var go = async function () {
+    var v = ti.value.trim();
+    if (!v) return;
+    addB.disabled = true;
+    var ok = await addTodo(v, rep.checked, daysSel);
+    addB.disabled = false;
+    if (ok) { ti.value = ''; rep.checked = false; renderDays(); }
+  };
+  addB.addEventListener('click', go);
+  ti.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+
+  wrap.appendChild(card);
+
+  var foot = el('div', 'foot');
+  foot.textContent = 'Todos are yours alone: they are never shared, never in the feed, and '
+    + 'never counted in your streak. The non-negotiables are the verdict.';
+  wrap.appendChild(foot);
+}
+
+/* Ticking a non-negotiable from the calendar writes through the same paths the
+   ledger uses, so the two views can never disagree. */
+async function toggleHabitOnDay(dayNum, i, plan) {
+  if (signedIn() && SP && SP.plan) {
+    if (!SP.days[dayNum]) SP.days[dayNum] = [];
+    while (SP.days[dayNum].length < plan.habits.length) SP.days[dayNum].push(false);
+    SP.days[dayNum][i] = !SP.days[dayNum][i];
+    queueDay(dayNum);
+    return;
+  }
+  var st = lsGet(STATE_KEY) || { days: {}, weeks: {} };
+  if (!st.days[dayNum]) st.days[dayNum] = [];
+  while (st.days[dayNum].length < plan.habits.length) st.days[dayNum].push(false);
+  st.days[dayNum][i] = !st.days[dayNum][i];
+  lsSet(STATE_KEY, st);
 }
 
 /* ---------- feed ---------- */
@@ -2119,6 +2426,7 @@ function route() {
   if (h === '#/friends') { renderFriends(); return; }
   if (h === '#/new') { renderWizard(); return; }
   if (h === '#/track') { renderTracker(); return; }
+  if (h === '#/days') { renderDays(); return; }
   if (h === '#/feed') { renderFeed(); return; }
   if (h === '#/people') { groupSection = 'feed'; renderPeople(); return; }
   if (h === '#/settings') { renderSettings(); return; }

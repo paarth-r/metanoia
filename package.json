@@ -1,0 +1,8 @@
+{
+  "name": "metanoia",
+  "private": true,
+  "description": "Thirty-day resets you run in public.",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
