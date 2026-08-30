@@ -13,7 +13,7 @@
       "backgroundColor": "#F5F2EA"
     },
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
       "bundleIdentifier": "com.paarthr.metanoia",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
@@ -27,9 +27,7 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "permissions": [
-        "android.permission.RECORD_AUDIO"
-      ]
+      "permissions": []
     },
     "web": {
       "favicon": "./assets/favicon.png"

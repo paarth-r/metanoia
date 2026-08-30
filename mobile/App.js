@@ -27,6 +27,44 @@ import {
   MONTH_NAMES, WEEKDAYS,
 } from './todos-core';
 
+/* A render throw in React Native unmounts the whole tree: no white screen of
+   death to read, just a dead app that has to be force-quit. This keeps the
+   crash on screen with a way out, and never blocks the user's data - the
+   ledger lives on the server. */
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { err: null };
+  }
+
+  static getDerivedStateFromError(err) {
+    return { err };
+  }
+
+  render() {
+    const c = this.props.c;
+    if (!this.state.err) return this.props.children;
+    return (
+      <View style={{ flex: 1, backgroundColor: c.bg, padding: 24, justifyContent: 'center' }}>
+        <Text style={{ fontFamily: SERIF, fontSize: 34, color: c.ink }}>Something broke</Text>
+        <Text style={{ fontFamily: MONO, fontSize: 13, color: c.muted, lineHeight: 20, marginTop: 10 }}>
+          This screen hit an error. Your ledger is safe on the server - nothing you ticked is lost.
+          Try again, and if it keeps happening, tell Paarth what you were doing.
+        </Text>
+        <Text selectable style={{ fontFamily: MONO, fontSize: 10, color: c.muted, marginTop: 16 }}>
+          {String(this.state.err && this.state.err.message).slice(0, 300)}
+        </Text>
+        <Pressable onPress={() => this.setState({ err: null })}
+          style={{ marginTop: 22, borderWidth: 1.5, borderColor: c.leather, borderRadius: 999,
+            paddingVertical: 13, alignItems: 'center' }}>
+          <Text style={{ fontFamily: MONO_M, fontSize: 12, letterSpacing: 1.4,
+            textTransform: 'uppercase', color: c.ink }}>Try again</Text>
+        </Pressable>
+      </View>
+    );
+  }
+}
+
 /* ---------- theme ---------- */
 
 /* Old leather ledger: parchment pages on a leather desk, sepia ink,
@@ -582,6 +620,7 @@ export default function App() {
   const [booted, setBooted] = useState(false);
   const [profile, setProfile] = useState(null);
   const [SP, setSP] = useState(null); // {plan, days, weeks}
+  const [loadErr, setLoadErr] = useState(false);
   const [tab, setTab] = useState('ledger');
   const [viewUser, setViewUser] = useState(null); // username being viewed
   const [wizard, setWizard] = useState(false);
@@ -600,22 +639,33 @@ export default function App() {
   const loadProfile = useCallback(async (s) => {
     if (!s) { setProfile(null); return; }
     const r = await sb.from('profiles').select('*').eq('id', s.user.id).maybeSingle();
+    /* Keep whatever we last knew rather than blanking the identity on a blip. */
+    if (r.error) return;
     setProfile(r.data || null);
   }, []);
 
+  /* A failed request is NOT the same as having no plan, and never the same as
+     having no ticks. Treating them alike showed "No reset yet" to someone with
+     a 27-day streak on a subway, invited them to build a second plan over the
+     first, and - because the ledger writes whole checks arrays - let one tap
+     against a blank base overwrite a real day on the server. On any error we
+     keep the last good data and raise a retry instead. */
   const loadPlan = useCallback(async (s) => {
-    if (!s) { setSP(null); return; }
+    if (!s) { setSP(null); setLoadErr(false); return; }
     const p = await sb.from('plans').select('*').eq('owner', s.user.id)
       .order('created_at', { ascending: false }).limit(1).maybeSingle();
-    if (!p.data) { setSP(null); return; }
-    const days = {}, weeks = {};
+    if (p.error) { setLoadErr(true); return; }
+    if (!p.data) { setSP(null); setLoadErr(false); return; }
     const [dr, wr] = await Promise.all([
       sb.from('plan_days').select('*').eq('plan_id', p.data.id),
       sb.from('plan_weeks').select('*').eq('plan_id', p.data.id),
     ]);
+    if (dr.error || wr.error) { setLoadErr(true); return; }
+    const days = {}, weeks = {};
     (dr.data || []).forEach((r) => { days[r.day] = r.checks; });
     (wr.data || []).forEach((r) => { weeks[r.week] = r.checks; });
     setSP({ plan: p.data, days, weeks });
+    setLoadErr(false);
   }, []);
 
   useEffect(() => {
@@ -654,14 +704,20 @@ export default function App() {
     if (!sp || !s) return;
     const days = Object.keys(dirtyRef.current.days);
     const weeks = Object.keys(dirtyRef.current.weeks);
-    dirtyRef.current = { days: {}, weeks: {} };
     const nH = sp.plan.habits.length;
+    let failed = false;
+    /* supabase-js RESOLVES with {error}, it does not throw, so the old
+       try/catch never fired and an unchecked upsert still said "Saved to your
+       ledger". Each dirty flag now survives until its own write lands, so a
+       failed save is retried instead of silently dropped. */
     try {
       for (const dStr of days) {
         const d = +dStr;
-        await sb.from('plan_days').upsert({
+        const r = await sb.from('plan_days').upsert({
           plan_id: sp.plan.id, day: d, checks: sp.days[d] || [], updated_at: new Date().toISOString(),
         });
+        if (r.error) { failed = true; continue; }
+        delete dirtyRef.current.days[dStr];
         if (sp.plan.visibility !== 'private') {
           const sc = scoreOf(sp.days[d], nH);
           await sb.from('feed_events').insert({
@@ -673,12 +729,20 @@ export default function App() {
       }
       for (const wStr of weeks) {
         const w = +wStr;
-        await sb.from('plan_weeks').upsert({
+        const r = await sb.from('plan_weeks').upsert({
           plan_id: sp.plan.id, week: w, checks: sp.weeks[w] || {}, updated_at: new Date().toISOString(),
         });
+        if (r.error) { failed = true; continue; }
+        delete dirtyRef.current.weeks[wStr];
       }
-      if (days.length || weeks.length) say('Saved to your ledger');
-    } catch (e) { say('Save failed. Check your connection.'); }
+    } catch (e) { failed = true; }
+    if (failed) {
+      say('Could not save. Retrying...');
+      if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = setTimeout(flush, 10000);
+    } else if (days.length || weeks.length) {
+      say('Saved to your ledger');
+    }
   };
 
   const toggleDay = (d, i) => {
@@ -753,7 +817,7 @@ export default function App() {
   const shell = (content) => (
     <SafeAreaView style={{ flex: 1, backgroundColor: c.bg }}>
       <StatusBar barStyle={c === DARK ? 'light-content' : 'dark-content'} backgroundColor={c.bg} />
-      <View style={{ flex: 1 }}>{content}</View>
+      <View style={{ flex: 1 }}><ErrorBoundary c={c}>{content}</ErrorBoundary></View>
       {toast ? (
         <View style={{ position: 'absolute', bottom: 90, alignSelf: 'center', backgroundColor: c.ink, paddingVertical: 7, paddingHorizontal: 14 }}>
           <Text style={{ fontFamily: MONO, fontSize: 11, letterSpacing: 1, color: c.paper }}>{toast}</Text>
@@ -787,7 +851,8 @@ export default function App() {
         {tab === 'ledger' ? (
           <LedgerScreen c={c} SP={SP} toggleDay={toggleDay} toggleWeek={toggleWeek}
             sel={sel} setSel={setSel} onCreate={() => setWizard(true)} onAdopt={createPlan} profile={profile}
-            onAddHabit={addHabit} onAddTarget={addTarget} />
+            onAddHabit={addHabit} onAddTarget={addTarget}
+            loadErr={loadErr} onRetry={() => { setLoadErr(false); loadPlan(session); }} />
         ) : null}
         {tab === 'days' ? (
           <DaysScreen c={c} SP={SP} toggleDay={toggleDay} me={session.user.id} say={say} />
@@ -840,7 +905,7 @@ export default function App() {
 
 /* ---------- ledger screen ---------- */
 
-function LedgerScreen({ c, SP, toggleDay, toggleWeek, sel, setSel, onCreate, onAdopt, profile, onAddHabit, onAddTarget }) {
+function LedgerScreen({ c, SP, toggleDay, toggleWeek, sel, setSel, onCreate, onAdopt, profile, onAddHabit, onAddTarget, loadErr, onRetry }) {
   const [commitKind, setCommitKind] = useState(null);
   const [newLabel, setNewLabel] = useState('');
   const [newCount, setNewCount] = useState('2');
@@ -862,6 +927,21 @@ function LedgerScreen({ c, SP, toggleDay, toggleWeek, sel, setSel, onCreate, onA
       ]
     );
   };
+  /* Never claim the reset does not exist when we simply could not reach it. */
+  if (loadErr && !SP) {
+    return (
+      <ScrollView contentContainerStyle={{ padding: 18, paddingTop: 30 }}>
+        <PageHeader c={c} eyebrow="Your ledger" title="Cannot reach it" />
+        <Card c={c} style={{ marginTop: 18 }}>
+          <Hint c={c}>
+            Your ledger is on the server and it is fine - this device just could not load it.
+            Check your connection and try again.
+          </Hint>
+          <Btn c={c} label="Try again" onPress={onRetry} />
+        </Card>
+      </ScrollView>
+    );
+  }
   if (!SP) {
     return (
       <ScrollView contentContainerStyle={{ padding: 18, paddingTop: 30 }}>
