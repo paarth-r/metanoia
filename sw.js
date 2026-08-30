@@ -1,11 +1,16 @@
 // Metanoia service worker: network-first with cache fallback.
 // The app always prefers fresh code and data; the cached shell keeps the
 // ledger opening instantly (and readable) when offline.
-var CACHE = 'metanoia-v1';
+// BUMP THIS whenever a shell file below changes. The install handler only runs
+// when this file's bytes change, and activate only deletes caches whose key is
+// not the current one - so leaving the version alone means an installed PWA
+// keeps serving the old shell forever, even though the network has new code.
+var CACHE = 'metanoia-v2';
 var SHELL = [
   './',
   './index.html',
   './style.css',
+  './todos-core.js',
   './app.js',
   './config.js',
   './manifest.webmanifest',
