@@ -5,7 +5,7 @@
 // when this file's bytes change, and activate only deletes caches whose key is
 // not the current one - so leaving the version alone means an installed PWA
 // keeps serving the old shell forever, even though the network has new code.
-var CACHE = 'metanoia-v3';
+var CACHE = 'metanoia-v4';
 var SHELL = [
   './',
   './index.html',

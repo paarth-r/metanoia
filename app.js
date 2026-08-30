@@ -414,6 +414,7 @@ function renderNav() {
     ? []
     : signedIn()
       ? [['#/track', 'Ledger'], ['#/days', 'Days'], ['#/feed', 'Feed'], ['#/people', 'Social'], ['#/settings', 'Account']]
+        .concat(isAdmin() ? [['#/admin', 'Reports']] : [])
       : (backendReady() ? [['#/auth', 'Sign in']] : []);
   var cur = location.hash || '#/';
   links.forEach(function (l) {
@@ -1389,6 +1390,168 @@ async function toggleHabitOnDay(dayNum, i, plan) {
   lsSet(STATE_KEY, st);
 }
 
+/* ---------- safety: blocking, reporting, moderation ---------- */
+
+var CONTACT_EMAIL = 'paarth.rajpal@gmail.com';
+var REPORT_REASONS = [
+  'Harassment or bullying', 'Hate speech or slurs', 'Sexual or explicit content',
+  'Violence or threats', 'Spam or scam', 'Something else'
+];
+
+function isAdmin() { return !!(myProfile && myProfile.is_admin); }
+
+/* Blocking is enforced in RLS (blocked_between), so it holds over the REST API
+   too, and it is symmetric: a block never becomes one-way surveillance. */
+async function blockUserWeb(targetId, onDone) {
+  var r = await sb.from('blocks').insert({ blocker: session.user.id, blocked: targetId });
+  if (r.error) { chip(r.error.code === '23505' ? 'Already blocked.' : 'Could not block.'); return; }
+  chip('Blocked. You will not see each other.');
+  if (onDone) onDone();
+}
+
+/* A small inline panel rather than a browser prompt(): the reason has to be one
+   of a known set so the queue is triageable. */
+function reportPanel(opts, host) {
+  host.textContent = '';
+  var card = el('div', 'card');
+  card.appendChild(el('h2', null, 'Report this ' + opts.kind));
+  card.appendChild(el('div', 'hint', 'What is wrong with it? Reports are reviewed within 24 hours.'));
+  var chosen = null;
+  var row = el('div', 'pills');
+  REPORT_REASONS.forEach(function (reason) {
+    var b = el('button', 'pill', reason); b.type = 'button';
+    b.addEventListener('click', function () {
+      chosen = reason;
+      [].forEach.call(row.children, function (x) { x.className = 'pill'; });
+      b.className = 'pill on';
+    });
+    row.appendChild(b);
+  });
+  card.appendChild(row);
+  var msg = el('div', 'ok', ''); msg.style.marginTop = '8px';
+  var br = el('div', 'btnrow');
+  var send = el('button', 'btn', 'Send report'); send.type = 'button';
+  var cancel = el('button', 'btn ghost', 'Cancel'); cancel.type = 'button';
+  cancel.addEventListener('click', function () { host.textContent = ''; });
+  send.addEventListener('click', async function () {
+    if (!chosen) { msg.textContent = 'Pick a reason.'; return; }
+    send.disabled = true;
+    var r = await sb.from('reports').insert({
+      reporter: session.user.id, target_user: opts.targetUser || null, kind: opts.kind,
+      message_id: opts.messageId || null, plan_id: opts.planId || null, reason: chosen
+    });
+    host.textContent = '';
+    chip(r.error ? 'Could not send that report.' : 'Reported. We review within 24 hours.');
+  });
+  br.appendChild(send); br.appendChild(cancel);
+  card.appendChild(br);
+  card.appendChild(msg);
+  host.appendChild(card);
+}
+
+/* ---------- admin: the review queue ---------- */
+
+async function renderAdmin() {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  wrap.appendChild(el('div', 'eyebrow', 'Moderation'));
+  wrap.appendChild(el('h1', null, 'Reports'));
+  root.appendChild(wrap);
+  if (!isAdmin()) {
+    var c0 = el('div', 'card');
+    c0.appendChild(el('div', 'hint', 'This page is for moderators.'));
+    wrap.appendChild(c0);
+    return;
+  }
+  var host = el('div');
+  wrap.appendChild(host);
+
+  var filter = 'open';
+  var pills = el('div');
+  wrap.insertBefore(pills, host);
+
+  async function load() {
+    host.textContent = '';
+    host.appendChild(el('div', 'hint', 'Loading...'));
+    var r = await sb.from('reports')
+      .select('*, reporter_p:profiles!reports_reporter_fkey(username), target_p:profiles!reports_target_user_fkey(username, display_name, suspended)')
+      .eq('status', filter).order('created_at', { ascending: false }).limit(100);
+    pills.textContent = '';
+    pills.appendChild(pillRow(['open', 'actioned', 'dismissed'].map(function (st) {
+      return { label: st, active: filter === st,
+        onClick: function () { filter = st; load(); } };
+    })));
+    host.textContent = '';
+    if (r.error) { host.appendChild(el('div', 'err', 'Could not load: ' + r.error.message)); return; }
+    var rows = r.data || [];
+    if (!rows.length) {
+      host.appendChild(el('div', 'card')).appendChild(el('div', 'hint', 'Nothing ' + filter + '.'));
+      return;
+    }
+    for (var i = 0; i < rows.length; i++) paintReport(rows[i], host, load);
+  }
+
+  function paintReport(rep, host2, reload) {
+    var card = el('div', 'card');
+    var head = el('div', 'dayhead');
+    head.appendChild(el('span', 'dn', rep.kind));
+    head.appendChild(el('span', 'dd', ago(rep.created_at)));
+    card.appendChild(head);
+    card.appendChild(el('div', 'sub', rep.reason));
+    var who = el('div', 'count');
+    who.textContent = 'reported by @' + ((rep.reporter_p && rep.reporter_p.username) || '?')
+      + '  |  about @' + ((rep.target_p && rep.target_p.username) || 'unknown')
+      + (rep.target_p && rep.target_p.suspended ? '  (SUSPENDED)' : '');
+    card.appendChild(who);
+
+    var body = el('div');
+    card.appendChild(body);
+    if (rep.message_id) {
+      body.appendChild(el('div', 'hint', 'Loading the message...'));
+      sb.from('group_messages').select('*').eq('id', rep.message_id).maybeSingle().then(function (m) {
+        body.textContent = '';
+        if (!m.data) { body.appendChild(el('div', 'count', 'Message already gone.')); return; }
+        var q = el('div', 'msg');
+        q.appendChild(el('div', 'mbody', m.data.body));
+        body.appendChild(q);
+      });
+    }
+
+    var br = el('div', 'btnrow');
+    function act(label, cls, fn) {
+      var b = el('button', 'btn ' + cls, label); b.type = 'button';
+      b.addEventListener('click', async function () { b.disabled = true; await fn(); reload(); });
+      br.appendChild(b);
+    }
+    if (rep.message_id) {
+      act('Remove message', 'ghost', async function () {
+        var d = await sb.from('group_messages').delete().eq('id', rep.message_id);
+        if (d.error) { chip('Could not remove: ' + d.error.message); return; }
+        await sb.from('reports').update({ status: 'actioned' }).eq('id', rep.id);
+        chip('Message removed.');
+      });
+    }
+    if (rep.target_user) {
+      var suspended = rep.target_p && rep.target_p.suspended;
+      act(suspended ? 'Unsuspend account' : 'Suspend account', 'ghost', async function () {
+        var rr = await sb.rpc('set_suspended', { target: rep.target_user, val: !suspended });
+        if (rr.error) { chip('Failed: ' + rr.error.message); return; }
+        if (!suspended) await sb.from('reports').update({ status: 'actioned' }).eq('id', rep.id);
+        chip(suspended ? 'Unsuspended.' : 'Account suspended.');
+      });
+    }
+    if (rep.status === 'open') {
+      act('Dismiss', 'ghost', async function () {
+        await sb.from('reports').update({ status: 'dismissed' }).eq('id', rep.id);
+      });
+    }
+    card.appendChild(br);
+    host2.appendChild(card);
+  }
+
+  load();
+}
+
 /* ---------- feed ---------- */
 
 var MUTED_KEY = 'metanoia_muted_groups_v1';
@@ -1853,6 +2016,7 @@ async function renderGroup(gid) {
   }
 
   if (groupSection === 'chat') {
+    var modHost = el('div');
     var ccard = el('div', 'card');
     var log = el('div', 'chatlog');
     ccard.appendChild(log);
@@ -1886,7 +2050,17 @@ async function renderGroup(gid) {
             (m.profiles && (m.profiles.display_name || m.profiles.username)) || 'unnamed'));
         }
         b.appendChild(el('div', 'mbody', m.body));
-        b.appendChild(el('div', 'mwhen', ago(m.created_at)));
+        var meta = el('div', 'mwhen');
+        meta.appendChild(document.createTextNode(ago(m.created_at)));
+        if (!mine) {
+          /* Every piece of user content needs a reachable report path. */
+          var rb = el('button', 'linkb', 'report'); rb.type = 'button';
+          rb.addEventListener('click', function () {
+            reportPanel({ targetUser: m.user_id, kind: 'message', messageId: m.id }, modHost);
+          });
+          meta.appendChild(rb);
+        }
+        b.appendChild(meta);
         log.appendChild(b);
       });
       log.scrollTop = log.scrollHeight;
@@ -1898,11 +2072,22 @@ async function renderGroup(gid) {
       var r = await sb.from('group_messages').insert({
         group_id: g.id, user_id: session.user.id, body: v
       });
-      if (r.error) chip('Could not send.');
+      if (r.error) {
+        /* guard_message() refuses banned terms and suspended accounts; say
+           which rather than a generic failure, and give the draft back. */
+        var em = String(r.error.message || '');
+        chip(/community rules/i.test(em) ? 'That message breaks the community rules.'
+          : /suspended/i.test(em) ? 'Your account is suspended.'
+          : 'Could not send.');
+        ci.value = v;
+        return;
+      }
       loadMsgs();
     };
     cs.addEventListener('click', send);
     ci.addEventListener('keydown', function (e) { if (e.key === 'Enter') send(); });
+    ccard.appendChild(el('div', 'hint', 'Report a message with the link beside its timestamp.'));
+    body.appendChild(modHost);
     loadMsgs();
 
     liveChannel = sb.channel('chat-' + g.id)
@@ -2089,7 +2274,20 @@ async function renderProfile(username) {
     } else {
       brw.appendChild(el('span', 'count', fr.data.status === 'accepted' ? 'Friends' : 'Request pending'));
     }
+    var modHost = el('div');
+    var repB = el('button', 'btn ghost small', 'Report'); repB.type = 'button';
+    repB.addEventListener('click', function () {
+      reportPanel({ targetUser: prof.id, kind: 'profile' }, modHost);
+    });
+    var blkB = el('button', 'btn ghost small', 'Block'); blkB.type = 'button';
+    blkB.addEventListener('click', function () {
+      if (!confirm('Block @' + prof.username + '? Neither of you will see the other\'s '
+        + 'ledger, feed activity or group messages. You can undo this in Account.')) return;
+      blockUserWeb(prof.id, function () { location.hash = '#/feed'; });
+    });
+    brw.appendChild(repB); brw.appendChild(blkB);
     wrap.appendChild(brw);
+    wrap.appendChild(modHost);
   }
 
   var plans = await sb.from('plans').select('*').eq('owner', prof.id)
@@ -2292,6 +2490,48 @@ function renderSettings() {
   });
   wrap.appendChild(api);
 
+  /* The block confirmation promises this list exists, so it has to. */
+  var blc = el('div', 'card');
+  blc.appendChild(el('h2', null, 'Blocked accounts'));
+  var blHost = el('div');
+  blc.appendChild(blHost);
+  wrap.appendChild(blc);
+  (async function () {
+    var r = await sb.from('blocks')
+      .select('blocked, profiles!blocks_blocked_fkey(username, display_name)');
+    blHost.textContent = '';
+    if (r.error) { blHost.appendChild(el('div', 'hint', 'Could not load your block list.')); return; }
+    var rows = r.data || [];
+    if (!rows.length) { blHost.appendChild(el('div', 'hint', 'You have not blocked anyone.')); return; }
+    rows.forEach(function (b) {
+      var rowE = el('div', 'trow');
+      rowE.appendChild(el('span', 'tl2',
+        (b.profiles && (b.profiles.display_name || b.profiles.username)) || 'unknown'));
+      var ub = el('button', 'btn small ghost', 'Unblock'); ub.type = 'button';
+      ub.addEventListener('click', async function () {
+        var d = await sb.from('blocks').delete()
+          .eq('blocker', session.user.id).eq('blocked', b.blocked);
+        if (d.error) { chip('Could not unblock.'); return; }
+        chip('Unblocked.'); renderSettings();
+      });
+      rowE.appendChild(ub);
+      blHost.appendChild(rowE);
+    });
+  })();
+
+  var legal = el('div', 'card');
+  legal.appendChild(el('h2', null, 'Legal'));
+  legal.appendChild(el('div', 'hint',
+    'The rules for what can be posted, and exactly what this app stores about you.'));
+  var lr = el('div', 'btnrow');
+  var tl = el('a', 'btn ghost small', 'Terms of use'); tl.href = 'terms.html';
+  var pl = el('a', 'btn ghost small', 'Privacy policy'); pl.href = 'privacy.html';
+  var cl = el('a', 'btn ghost small', 'Contact support');
+  cl.href = 'mailto:' + CONTACT_EMAIL + '?subject=Metanoia';
+  lr.appendChild(tl); lr.appendChild(pl); lr.appendChild(cl);
+  legal.appendChild(lr);
+  wrap.appendChild(legal);
+
   var outc = el('div', 'card');
   var out = el('button', 'btn ghost', 'Sign out'); out.type = 'button';
   out.addEventListener('click', async function () {
@@ -2300,6 +2540,31 @@ function renderSettings() {
   });
   outc.appendChild(out);
   wrap.appendChild(outc);
+
+  /* App Store 5.1.1(v) applies to the app, but the same account is reachable
+     here, so the same door exists on both. */
+  var del = el('div', 'card');
+  del.appendChild(el('h2', null, 'Delete account'));
+  del.appendChild(el('div', 'hint',
+    'This erases your account for good: your login, profile, plans, every day you ticked, '
+    + 'your todos, your group memberships and your messages. Immediate, permanent, no recovery.'));
+  var delB = el('button', 'btn ghost', 'Delete my account'); delB.type = 'button';
+  delB.addEventListener('click', async function () {
+    if (!confirm('Delete your account? Everything goes: your ledger, your streak, your todos, '
+      + 'your messages. This cannot be undone.')) return;
+    var who = (myProfile && myProfile.username) ? '@' + myProfile.username : 'this account';
+    var typed = prompt('There is no recovery and no grace period.\n\n'
+      + 'Type DELETE to permanently remove ' + who + '.');
+    if (String(typed).trim().toUpperCase() !== 'DELETE') { chip('Not deleted.'); return; }
+    delB.disabled = true;
+    var r = await sb.rpc('delete_me');
+    if (r.error) { delB.disabled = false; chip('Could not delete: ' + r.error.message); return; }
+    await sb.auth.signOut();
+    location.hash = '#/';
+    chip('Your account is gone.');
+  });
+  del.appendChild(delB);
+  wrap.appendChild(del);
 }
 
 function renderJoin(code) {
@@ -2402,6 +2667,7 @@ function route() {
   if (h.indexOf('#/join/') === 0) { renderJoin(h.slice(7)); return; }
   if (h.indexOf('#/g/') === 0) { renderGroup(h.slice(4)); return; }
   if (h === '#/friends') { renderFriends(); return; }
+  if (h === '#/admin') { renderAdmin(); return; }
   if (h === '#/new') { renderWizard(); return; }
   if (h === '#/track') { renderTracker(); return; }
   if (h === '#/days') { renderDays(); return; }
