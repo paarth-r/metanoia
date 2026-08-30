@@ -21,6 +21,11 @@ import {
   isoToday, dayNumOf, dateOfDay, fmtDay, weekOf, scoreOf, ago, planRowToObj,
   ledgerStats,
 } from './lib';
+import {
+  isoTodayLocal, parseIsoLocal, resolveTodosForDate, todoCountsForDate,
+  monthGrid, monthLabel, planDayOf, endDateForStop, dayHasMark,
+  MONTH_NAMES, WEEKDAYS,
+} from './todos-core';
 
 /* ---------- theme ---------- */
 
@@ -773,7 +778,7 @@ export default function App() {
   }
 
   const tabs = [
-    ['ledger', 'Ledger'], ['feed', 'Feed'], ['social', 'Social'], ['account', 'Account'],
+    ['ledger', 'Ledger'], ['days', 'Days'], ['feed', 'Feed'], ['social', 'Social'], ['account', 'Account'],
   ];
 
   return shell(
@@ -783,6 +788,9 @@ export default function App() {
           <LedgerScreen c={c} SP={SP} toggleDay={toggleDay} toggleWeek={toggleWeek}
             sel={sel} setSel={setSel} onCreate={() => setWizard(true)} onAdopt={createPlan} profile={profile}
             onAddHabit={addHabit} onAddTarget={addTarget} />
+        ) : null}
+        {tab === 'days' ? (
+          <DaysScreen c={c} SP={SP} toggleDay={toggleDay} me={session.user.id} say={say} />
         ) : null}
         {tab === 'feed' ? (
           <FeedScreen c={c} me={session.user.id} onOpenUser={setViewUser}
@@ -806,13 +814,13 @@ export default function App() {
             return (
               <Pressable key={key} onPress={() => { setTab(key); if (key === 'feed') setFeedUnseen(0); }}
                 style={({ pressed }) => ({
-                  flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 24,
+                  flex: 1, paddingVertical: 12, paddingHorizontal: 2, alignItems: 'center', borderRadius: 24,
                   backgroundColor: active ? c.leather : 'transparent',
                   opacity: pressed ? 0.8 : 1,
                 })}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-                  <Text style={{
-                    fontFamily: MONO_M, fontSize: 12, letterSpacing: 1.2, textTransform: 'uppercase',
+                  <Text numberOfLines={1} style={{
+                    fontFamily: MONO_M, fontSize: 10.5, letterSpacing: 0.6, textTransform: 'uppercase',
                     color: active ? c.onLeather : c.muted,
                   }}>{label}</Text>
                   {key === 'feed' && feedUnseen > 0 ? (
@@ -911,6 +919,259 @@ function LedgerScreen({ c, SP, toggleDay, toggleWeek, sel, setSel, onCreate, onA
       </Card>
       <Text style={{ fontFamily: MONO, fontSize: 11, color: c.muted, lineHeight: 19, marginTop: 6 }}>
         Never miss twice. Done before dopamine. The scorecard is the verdict on the day, not your feelings.
+      </Text>
+    </ScrollView>
+  );
+}
+
+/* ---------- days: a real calendar of non-negotiables and todos ---------- */
+
+/* Todos run on real dates, outside any 30-day plan. A repeating todo is one
+   row plus one tick per day done, so a new day is fresh by having no tick yet
+   and history is never rewritten. Private: never shared, never in the feed,
+   never counted in the streak. */
+function DaysScreen({ c, SP, toggleDay, me, say }) {
+  const [todos, setTodos] = useState(null);
+  const [ticks, setTicks] = useState([]);
+  const [ready, setReady] = useState(false);
+  const [missing, setMissing] = useState(false);
+  const today = isoTodayLocal();
+  const [sel, setSel] = useState(today);
+  const [month, setMonth] = useState(() => {
+    const d = parseIsoLocal(today);
+    return { y: d.getFullYear(), m: d.getMonth() };
+  });
+  const [draft, setDraft] = useState('');
+  const [repeat, setRepeat] = useState(false);
+
+  const load = useCallback(async () => {
+    const [t, k] = await Promise.all([
+      sb.from('todos').select('*').order('created_at'),
+      sb.from('todo_ticks').select('*'),
+    ]);
+    if (t.error) { setMissing(true); setReady(true); return; }
+    setTodos(t.data || []);
+    setTicks(k.error ? [] : (k.data || []));
+    setReady(true);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const add = async () => {
+    const body = draft.trim();
+    if (!body) return;
+    const row = repeat
+      ? { owner: me, body, repeats: true, starts_on: sel, on_date: null, ends_on: null }
+      : { owner: me, body, repeats: false, on_date: sel, starts_on: null, ends_on: null };
+    const r = await sb.from('todos').insert(row).select().single();
+    if (r.error) { say('Could not add that.'); return; }
+    setTodos((p) => [...p, r.data]);
+    setDraft(''); setRepeat(false);
+  };
+
+  const tick = async (id, done) => {
+    if (done) {
+      const r = await sb.from('todo_ticks').upsert(
+        { todo_id: id, on_date: sel, updated_at: new Date().toISOString() },
+        { onConflict: 'todo_id,on_date' });
+      if (r.error) { say('Could not save that tick.'); return; }
+      setTicks((p) => [...p, { todo_id: id, on_date: sel }]);
+    } else {
+      const r = await sb.from('todo_ticks').delete().eq('todo_id', id).eq('on_date', sel);
+      if (r.error) { say('Could not clear that tick.'); return; }
+      setTicks((p) => p.filter((t) => !(t.todo_id === id && t.on_date === sel)));
+    }
+  };
+
+  /* A repeat with history is ended, not erased, so the days already ticked
+     keep it. A repeat nobody ever ticked, and any one-off, go for good. */
+  const remove = (id) => {
+    const full = todos.find((t) => t.id === id);
+    if (!full) return;
+    const hasHistory = full.repeats && ticks.some((t) => t.todo_id === id);
+    const doIt = async () => {
+      if (hasHistory) {
+        const ends = endDateForStop(id, ticks, sel);
+        const r = await sb.from('todos').update({ ends_on: ends }).eq('id', id);
+        if (r.error) { say('Could not stop that.'); return; }
+        setTodos((p) => p.map((t) => (t.id === id ? { ...t, ends_on: ends } : t)));
+        say('Stopped. The days you ticked keep it.');
+        return;
+      }
+      const r = await sb.from('todos').delete().eq('id', id);
+      if (r.error) { say('Could not delete that.'); return; }
+      setTodos((p) => p.filter((t) => t.id !== id));
+      setTicks((p) => p.filter((t) => t.todo_id !== id));
+    };
+    Alert.alert(
+      hasHistory ? 'Stop this daily todo?' : 'Delete this todo?',
+      hasHistory
+        ? `"${full.body}" stops from here on. The days you already ticked keep it.`
+        : `"${full.body}" goes for good.`,
+      [{ text: 'Cancel', style: 'cancel' },
+       { text: hasHistory ? 'Stop' : 'Delete', style: 'destructive', onPress: doIt }]);
+  };
+
+  if (!ready) {
+    return <ActivityIndicator color={c.ink} style={{ marginTop: 60 }} />;
+  }
+  if (missing) {
+    return (
+      <ScrollView contentContainerStyle={{ padding: 18, paddingTop: 30 }}>
+        <PageHeader c={c} eyebrow="Every day, on the record" title="Days" />
+        <Card c={c}>
+          <Hint c={c} style={{ marginBottom: 0 }}>
+            Todos are not set up on the backend yet. Run
+            supabase/migration-2026-08-29-todos.sql in the Supabase SQL editor, then reopen this tab.
+          </Hint>
+        </Card>
+      </ScrollView>
+    );
+  }
+
+  const plan = SP && SP.plan ? planRowToObj(SP.plan) : null;
+  const planDay = plan ? planDayOf(plan.startISO, sel) : null;
+  const future = sel > today;
+  const list = resolveTodosForDate(todos, ticks, sel);
+  const counts = todoCountsForDate(todos, ticks, sel);
+  const selDate = parseIsoLocal(sel);
+  const D = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const step = (n) => setMonth((p) => {
+    const m = p.m + n;
+    if (m < 0) return { y: p.y - 1, m: 11 };
+    if (m > 11) return { y: p.y + 1, m: 0 };
+    return { y: p.y, m };
+  });
+
+  const navBtn = (label, onPress) => (
+    <Pressable onPress={onPress} hitSlop={10}
+      style={{ width: 34, height: 34, borderRadius: 17, borderWidth: 1.5, borderColor: c.line,
+        alignItems: 'center', justifyContent: 'center' }}>
+      <Text style={{ fontFamily: MONO_M, fontSize: 13, color: c.muted }}>{label}</Text>
+    </Pressable>
+  );
+
+  return (
+    <ScrollView contentContainerStyle={{ padding: 18, paddingTop: 24, paddingBottom: 40 }}
+      keyboardShouldPersistTaps="handled">
+      <PageHeader c={c} eyebrow="Every day, on the record" title="Days" />
+
+      <Card c={c}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          {navBtn('<', () => step(-1))}
+          <Text style={{ fontFamily: SERIF, fontSize: 24, color: c.ink }}>{monthLabel(month.y, month.m)}</Text>
+          {navBtn('>', () => step(1))}
+        </View>
+        <View style={{ flexDirection: 'row', marginBottom: 6 }}>
+          {WEEKDAYS.map((w, i) => (
+            <Text key={i} style={{ flex: 1, textAlign: 'center', fontFamily: MONO, fontSize: 10,
+              letterSpacing: 1.2, color: c.muted }}>{w}</Text>
+          ))}
+        </View>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+          {monthGrid(month.y, month.m).map((cell) => {
+            const pd = plan ? planDayOf(plan.startISO, cell.iso) : null;
+            let full = false, zero = false;
+            if (pd) {
+              const nH = plan.habits.length;
+              const sc = scoreOf(SP.days[pd], nH);
+              full = sc === nH;
+              zero = sc === 0 && cell.iso < today;
+            }
+            const isSel = cell.iso === sel;
+            return (
+              <Pressable key={cell.iso} onPress={() => setSel(cell.iso)}
+                style={{ width: `${100 / 7}%`, aspectRatio: 1, padding: 2 }}>
+                <View style={{
+                  flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 4,
+                  borderWidth: isSel ? 2 : 1,
+                  borderColor: isSel ? c.ink : zero ? c.danger : cell.iso === today ? c.gold : c.lineSoft,
+                  backgroundColor: full ? c.leather : 'transparent',
+                  opacity: cell.inMonth ? 1 : 0.28,
+                }}>
+                  <Text style={{ fontFamily: SERIF, fontSize: 16,
+                    color: full ? c.onLeather : zero ? c.danger : c.ink }}>{cell.day}</Text>
+                  {dayHasMark(todos, ticks, cell.iso, today) ? (
+                    <View style={{ position: 'absolute', bottom: 4, width: 4, height: 4,
+                      borderRadius: 2, backgroundColor: full ? c.onLeather : c.gold }} />
+                  ) : null}
+                </View>
+              </Pressable>
+            );
+          })}
+        </View>
+      </Card>
+
+      <Card c={c}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+          <Text style={{ fontFamily: SERIF, fontSize: 24, color: c.ink }}>
+            {`${D[selDate.getDay()]} ${MONTH_NAMES[selDate.getMonth()].slice(0, 3)} ${selDate.getDate()}`}
+          </Text>
+          <Text style={{ fontFamily: MONO, fontSize: 11, letterSpacing: 1.4, textTransform: 'uppercase', color: c.muted }}>
+            {sel === today ? 'today' : future ? 'ahead' : 'past'}
+          </Text>
+        </View>
+
+        {planDay ? (
+          <View>
+            <Text style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 2, textTransform: 'uppercase',
+              color: c.muted, marginBottom: 4 }}>{`Non-negotiables - day ${planDay} of 30`}</Text>
+            {plan.habits.map((h, i) => {
+              const on = !!(SP.days[planDay] || [])[i];
+              return (
+                <Pressable key={i} disabled={future} onPress={() => toggleDay(planDay, i)}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11,
+                    borderTopWidth: 1, borderColor: c.lineSoft, opacity: future ? 0.45 : 1 }}>
+                  <CheckBoxMark c={c} on={on} />
+                  <Text style={{ fontFamily: MONO, fontSize: 13, color: c.ink, flex: 1 }}>{h}</Text>
+                </Pressable>
+              );
+            })}
+            <Text style={{ fontFamily: SERIF, fontSize: 18, color: c.muted, marginTop: 8 }}>
+              {`${scoreOf(SP.days[planDay], plan.habits.length)} / ${plan.habits.length}`}
+            </Text>
+          </View>
+        ) : null}
+
+        <Text style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 2, textTransform: 'uppercase',
+          color: c.muted, marginTop: 18, marginBottom: 4 }}>
+          {counts.total ? `Todos  ${counts.done} / ${counts.total}` : 'Todos'}
+        </Text>
+        {!list.length ? <Hint c={c}>Nothing on the books for this day.</Hint> : null}
+        {list.map((t) => (
+          <View key={t.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 10,
+            borderTopWidth: 1, borderColor: c.lineSoft }}>
+            <Pressable disabled={future} onPress={() => tick(t.id, !t.done)}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11,
+                flex: 1, opacity: future ? 0.45 : 1 }}>
+              <CheckBoxMark c={c} on={t.done} />
+              <Text style={{ fontFamily: MONO, fontSize: 13, color: c.ink, flex: 1 }}>
+                {t.body}
+                {t.repeats ? (
+                  <Text style={{ fontSize: 9, letterSpacing: 1.2, color: c.muted }}>{'   DAILY'}</Text>
+                ) : null}
+              </Text>
+            </Pressable>
+            <Pressable hitSlop={8} onPress={() => remove(t.id)}>
+              <Text style={{ fontFamily: MONO, fontSize: 11, color: c.muted }}>delete</Text>
+            </Pressable>
+          </View>
+        ))}
+
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
+          <Input c={c} placeholder="Add a todo for this day" value={draft} onChangeText={setDraft}
+            maxLength={120} style={{ flex: 1 }} onSubmitEditing={add} returnKeyType="done" />
+          <Btn c={c} label="Add" onPress={add} />
+        </View>
+        <Pressable onPress={() => setRepeat((r) => !r)}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 12 }}>
+          <CheckBoxMark c={c} on={repeat} size={18} />
+          <Text style={{ fontFamily: MONO, fontSize: 12, color: c.muted }}>Repeat every day from here</Text>
+        </Pressable>
+      </Card>
+
+      <Text style={{ fontFamily: MONO, fontSize: 11, color: c.muted, lineHeight: 19 }}>
+        Todos are yours alone: never shared, never in the feed, never counted in your streak.
+        The non-negotiables are the verdict.
       </Text>
     </ScrollView>
   );

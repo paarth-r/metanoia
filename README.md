@@ -38,6 +38,12 @@ Live at https://paarth-r.github.io/metanoia/
   writes them into the profile as the account is created. Accounts that predate
   this (or whose name was taken mid-signup) hit a claim screen that blocks the
   app until they pick one, so nobody ever shows up as "unnamed".
+- Days: a real calendar, month by month, outside the thirty-day box. Open any
+  date to see that day's non-negotiables (when it falls inside a reset) over its
+  todos. A todo is a one-off on its date or a daily repeat that refreshes each
+  morning; either way you can go back and tick a day late, and yesterday keeps
+  its own record. Todos are private - never shared, never in the feed, and never
+  counted in your streak, so an errand cannot dilute the verdict.
 - Guest mode: with no account the whole tracker still works, stored in
   localStorage; signing in later imports it.
 - The original plan (the "paarth" account) ships built in and can be adopted
@@ -46,10 +52,20 @@ Live at https://paarth-r.github.io/metanoia/
 ## Stack
 
 - Frontend: one static page (index.html + style.css + app.js), vanilla JS, no
-  build step, hosted on GitHub Pages. Fonts: Cormorant Garamond + IBM Plex Mono.
+  build step, hosted on GitHub Pages. `todos-core.js` holds the pure date and
+  recurrence logic; because there is no bundler and Metro cannot reach outside
+  `mobile/`, `mobile/todos-core.js` carries a byte-identical copy of its shared
+  region and `npm test` fails if the two drift. Fonts: Cormorant Garamond + IBM Plex Mono.
 - Backend: Supabase free tier - magic-link auth (no passwords), Postgres with
   row-level security (schema in `supabase/schema.sql`), PostgREST API,
   realtime feed. `config.js` holds the project URL and public anon key.
+
+## Tests
+
+`npm test` (Node's built-in runner, no dependencies) covers the todo recurrence
+and calendar date logic in `todos-core.js` - end-date boundaries, ticking a past
+day late, daylight saving, leap years, and the drift guard between the two
+copies. The UI has no tests; it is verified by driving it in a browser.
 
 ## API
 

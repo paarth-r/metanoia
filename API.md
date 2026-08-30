@@ -33,6 +33,30 @@ Prefer: return=representation
 - `feed_events` - user_id, plan_id, kind (`started` | `tick` | `perfect` | `streak` | `finished`),
   day, payload
 - `friendships`, `groups`, `group_members` - social graph; groups join via RPC
+- `group_messages` - group_id, user_id, body; `feed_reactions` - event_id,
+  user_id, kind (`respect` | `locked_in` | `soft`)
+- `todos` - owner, body, repeats, and then either `on_date` (a one-off) or
+  `starts_on` plus optional `ends_on` (a daily repeat). Owner-only, never shared.
+- `todo_ticks` - todo_id, on_date. One row per day a todo was completed, which
+  is what makes a repeat refresh daily. Absence of a row means not done.
+
+Todo recipes (dates are plain `YYYY-MM-DD`, always in the user's local time -
+do not derive them from a UTC timestamp):
+
+```
+POST /rest/v1/todos
+{"owner": "<their-user-id>", "body": "Vitamins", "repeats": true,
+ "starts_on": "2026-08-29"}
+
+POST /rest/v1/todo_ticks
+Prefer: resolution=merge-duplicates
+{"todo_id": "<todo-id>", "on_date": "2026-08-29"}
+
+DELETE /rest/v1/todo_ticks?todo_id=eq.<todo-id>&on_date=eq.2026-08-29
+```
+
+To stop a repeating todo without destroying its history, set `ends_on` to the
+later of yesterday and its last tick, rather than deleting the row.
 
 ## Recipes
 
