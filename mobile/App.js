@@ -272,6 +272,8 @@ function Ledger({ c, plan, getDay, getWeek, onToggleDay, onToggleWeek, readOnly,
 function AuthScreen({ c }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [uname, setUname] = useState('');
+  const [dname, setDname] = useState('');
   const [mode, setMode] = useState('signin'); // signin | signup | forgot
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
@@ -289,10 +291,22 @@ function AuthScreen({ c }) {
         : `Could not sign in: ${r.error.message}`);
     } else if (mode === 'signup') {
       if (password.length < 8) { setMsg('Password needs 8+ characters.'); setBusy(false); return; }
+      const u = uname.trim().toLowerCase();
+      const d = dname.trim();
+      if (!/^[a-z0-9_]{3,20}$/.test(u)) {
+        setMsg('Username: 3-20 characters, a-z, 0-9, underscore.'); setBusy(false); return;
+      }
+      if (!d) { setMsg('Pick a display name. It is what friends see.'); setBusy(false); return; }
+      setMsg('Checking that name...');
+      const taken = await sb.from('profiles').select('id').eq('username', u).maybeSingle();
+      if (taken.data) { setMsg(`"${u}" is taken. Pick another.`); setBusy(false); return; }
       setMsg('Creating...');
-      const r = await sb.auth.signUp({ email: v, password, options: { emailRedirectTo: SITE } });
+      const r = await sb.auth.signUp({
+        email: v, password,
+        options: { emailRedirectTo: SITE, data: { username: u, display_name: d } },
+      });
       setMsg(r.error ? `Could not create: ${r.error.message}`
-        : 'Account created. Tap the link in your confirmation email, then sign in here.');
+        : `Account created as @${u}. Tap the link in your confirmation email, then sign in here.`);
     } else {
       setMsg('Sending...');
       const r = await sb.auth.resetPasswordForEmail(v, { redirectTo: SITE });
@@ -313,7 +327,7 @@ function AuthScreen({ c }) {
         <H2 c={c}>{mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Reset password' : 'Sign in'}</H2>
         <Hint c={c}>
           {mode === 'signup'
-            ? 'One confirmation email, then you sign in with your password.'
+            ? 'Pick the name people will see. One confirmation email, then you sign in with your password.'
             : mode === 'forgot'
               ? 'We email a reset link; it opens the website to set a new password.'
               : 'Email and password.'}
@@ -325,6 +339,15 @@ function AuthScreen({ c }) {
             secureTextEntry autoCapitalize="none"
             autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
             value={password} onChangeText={setPassword} style={{ marginTop: 8 }} />
+        ) : null}
+        {mode === 'signup' ? (
+          <>
+            <Input c={c} placeholder="username (a-z, 0-9, underscore)" autoCapitalize="none"
+              autoCorrect={false} autoComplete="username" maxLength={20}
+              value={uname} onChangeText={setUname} style={{ marginTop: 8 }} />
+            <Input c={c} placeholder="Display name" autoComplete="name" maxLength={40}
+              value={dname} onChangeText={setDname} style={{ marginTop: 8 }} />
+          </>
         ) : null}
         <Btn c={c}
           label={busy ? '...' : mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Sign in'}
@@ -346,6 +369,54 @@ function AuthScreen({ c }) {
           <Text style={{ fontFamily: MONO, fontSize: 12, color: c.muted, lineHeight: 18, marginTop: 2 }}>{r[1]}</Text>
         </View>
       ))}
+    </ScrollView>
+  );
+}
+
+/* Signed in with no username: every fallback reads 'unnamed' or '?' and their
+   profile link goes nowhere, so nothing else opens until they pick one. New
+   signups set it on the form; this catches accounts made before that existed,
+   and the rare case where the name was taken mid-signup. */
+function ClaimScreen({ c, profile, me, onClaimed }) {
+  const [uname, setUname] = useState('');
+  const [dname, setDname] = useState(profile?.display_name || '');
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const claim = async () => {
+    const u = uname.trim().toLowerCase();
+    const d = dname.trim();
+    if (!/^[a-z0-9_]{3,20}$/.test(u)) { setMsg('Username: 3-20 characters, a-z, 0-9, underscore.'); return; }
+    if (!d) { setMsg('Pick a display name. It is what friends see.'); return; }
+    setBusy(true);
+    setMsg('Claiming...');
+    const r = await sb.from('profiles').update({ username: u, display_name: d }).eq('id', me);
+    setBusy(false);
+    if (r.error) {
+      setMsg(r.error.code === '23505' ? `"${u}" is taken. Pick another.` : `Failed: ${r.error.message}`);
+      return;
+    }
+    onClaimed();
+  };
+
+  return (
+    <ScrollView contentContainerStyle={{ padding: 18, paddingTop: 30 }} keyboardShouldPersistTaps="handled">
+      <PageHeader c={c} eyebrow="One thing first" title="Claim your name" />
+      <Card c={c}>
+        <Hint c={c}>
+          Your username is your public address: it is how friends find you and where your ledger
+          lives. Your display name is what people read in the feed. Nothing else opens until both are set.
+        </Hint>
+        <Input c={c} placeholder="username (a-z, 0-9, underscore)" autoCapitalize="none"
+          autoCorrect={false} maxLength={20} value={uname} onChangeText={setUname} />
+        <Input c={c} placeholder="Display name" maxLength={40} value={dname}
+          onChangeText={setDname} style={{ marginTop: 8 }} />
+        <Btn c={c} label={busy ? '...' : 'Claim it'} onPress={claim} disabled={busy} style={{ marginTop: 10 }} />
+        {msg ? <Hint c={c} style={{ marginTop: 10, marginBottom: 0 }}>{msg}</Hint> : null}
+      </Card>
+      <Card c={c}>
+        <Btn c={c} label="Sign out" ghost onPress={() => sb.auth.signOut()} />
+      </Card>
     </ScrollView>
   );
 }
@@ -688,6 +759,12 @@ export default function App() {
 
   if (!booted) return shell(<ActivityIndicator style={{ marginTop: 80 }} color={c.ink} />);
   if (!session) return shell(<AuthScreen c={c} />);
+  if (profile && !profile.username) {
+    return shell(
+      <ClaimScreen c={c} profile={profile} me={session.user.id}
+        onClaimed={async () => { await loadProfile(session); setTab('ledger'); say('Welcome.'); }} />
+    );
+  }
   if (wizard) return shell(<WizardScreen c={c} onDone={createPlan} onCancel={() => setWizard(false)} />);
   if (viewUser) {
     return shell(

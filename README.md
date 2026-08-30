@@ -22,6 +22,11 @@ Live at https://paarth-r.github.io/metanoia/
 - Privacy tiers per plan: private (owner only), friends (friends + group-mates),
   public (anyone, signed in or not). Enforced by Postgres row-level security,
   not client code.
+- Identity is claimed at signup: the account form takes a username and display
+  name and passes them as auth metadata, and the `handle_new_user()` trigger
+  writes them into the profile as the account is created. Accounts that predate
+  this (or whose name was taken mid-signup) hit a claim screen that blocks the
+  app until they pick one, so nobody ever shows up as "unnamed".
 - Guest mode: with no account the whole tracker still works, stored in
   localStorage; signing in later imports it.
 - The original plan (the "paarth" account) ships built in and can be adopted
@@ -43,7 +48,8 @@ token to their own tools or Claude to manage goals programmatically.
 ## Setup (new deployment)
 
 1. Create a Supabase project.
-2. Run `supabase/schema.sql` in the SQL editor.
+2. Run `supabase/schema.sql` in the SQL editor, then every
+   `supabase/migration-*.sql` in date order.
 3. Auth -> URL Configuration: set the site URL to your Pages URL.
 4. Fill `config.js` with the project URL and anon key.
 

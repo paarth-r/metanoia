@@ -138,6 +138,11 @@ var realtimeStarted = false;
 
 function backendReady() { return !!sb; }
 function signedIn() { return !!(sb && session); }
+/* Signed in but with no username: every fallback in the app reads 'unnamed'
+   and their profile link is a dead end, so the claim screen blocks the app
+   until they pick one. New signups set it in the form; this catches accounts
+   created before that existed. */
+function needsClaim() { return signedIn() && myProfile && !myProfile.username; }
 
 async function loadMyProfile() {
   if (!signedIn()) { myProfile = null; return; }
@@ -393,9 +398,11 @@ function renderNav() {
   var brand = el('a', 'brand', 'Metanoia');
   brand.href = '#/';
   nav.appendChild(brand);
-  var links = signedIn()
-    ? [['#/track', 'Ledger'], ['#/feed', 'Feed'], ['#/people', 'Social'], ['#/settings', 'Account']]
-    : (backendReady() ? [['#/auth', 'Sign in']] : []);
+  var links = needsClaim()
+    ? []
+    : signedIn()
+      ? [['#/track', 'Ledger'], ['#/feed', 'Feed'], ['#/people', 'Social'], ['#/settings', 'Account']]
+      : (backendReady() ? [['#/auth', 'Sign in']] : []);
   var cur = location.hash || '#/';
   links.forEach(function (l) {
     var a = el('a', 'navlink' + (cur.indexOf(l[0]) === 0 ? ' active' : ''), l[1]);
@@ -493,7 +500,7 @@ function renderAuth() {
     wrap.appendChild(card); root.appendChild(wrap); return;
   }
   var hint = authMode === 'signup'
-    ? 'You get one confirmation email. Click its link, then sign in.'
+    ? 'Pick the name people will see. You get one confirmation email; click its link, then sign in.'
     : authMode === 'forgot'
       ? 'We email you a reset link. Open it here and set a new password.'
       : 'Email and password.';
@@ -508,6 +515,18 @@ function renderAuth() {
     pw.setAttribute('autocomplete', authMode === 'signup' ? 'new-password' : 'current-password');
     pw.style.marginTop = '8px';
     card.appendChild(pw);
+  }
+  var unIn = null, dnIn = null;
+  if (authMode === 'signup') {
+    unIn = el('input'); unIn.type = 'text'; unIn.placeholder = 'username (a-z, 0-9, underscore)';
+    unIn.setAttribute('autocapitalize', 'none');
+    unIn.setAttribute('autocomplete', 'username');
+    unIn.maxLength = 20; unIn.style.marginTop = '8px';
+    card.appendChild(unIn);
+    dnIn = el('input'); dnIn.type = 'text'; dnIn.placeholder = 'Display name';
+    dnIn.setAttribute('autocomplete', 'name');
+    dnIn.maxLength = 40; dnIn.style.marginTop = '8px';
+    card.appendChild(dnIn);
   }
   var go = el('button', 'btn',
     authMode === 'signup' ? 'Create account' : authMode === 'forgot' ? 'Send reset link' : 'Sign in');
@@ -528,13 +547,25 @@ function renderAuth() {
       else location.hash = '#/track';
     } else if (authMode === 'signup') {
       if (pw.value.length < 8) { msg.textContent = 'Password needs 8+ characters.'; return; }
+      var u = unIn.value.trim().toLowerCase();
+      var dnv = dnIn.value.trim();
+      if (!/^[a-z0-9_]{3,20}$/.test(u)) {
+        msg.textContent = 'Username: 3-20 characters, a-z, 0-9, underscore.'; return;
+      }
+      if (!dnv) { msg.textContent = 'Pick a display name. It is what friends see.'; return; }
+      msg.textContent = 'Checking that name...';
+      var taken = await sb.from('profiles').select('id').eq('username', u).maybeSingle();
+      if (taken.data) { msg.textContent = '"' + u + '" is taken. Pick another.'; return; }
       msg.textContent = 'Creating...';
       var r2 = await sb.auth.signUp({
         email: v, password: pw.value,
-        options: { emailRedirectTo: location.origin + location.pathname }
+        options: {
+          emailRedirectTo: location.origin + location.pathname,
+          data: { username: u, display_name: dnv }
+        }
       });
       msg.textContent = r2.error ? ('Could not create: ' + r2.error.message)
-        : 'Account created. Check your email for the confirmation link, then sign in.';
+        : 'Account created as @' + u + '. Check your email for the confirmation link, then sign in.';
     } else {
       msg.textContent = 'Sending...';
       var r3 = await sb.auth.resetPasswordForEmail(v, {
@@ -1342,8 +1373,10 @@ function renderSettings() {
   idc.appendChild(imsg);
   sv.addEventListener('click', async function () {
     var u = un.value.trim().toLowerCase();
-    if (u && !/^[a-z0-9_]{3,20}$/.test(u)) { imsg.textContent = '3-20 chars: a-z, 0-9, underscore.'; return; }
-    var r = await sb.from('profiles').update({ username: u || null, display_name: dn.value.trim() })
+    if (!/^[a-z0-9_]{3,20}$/.test(u)) { imsg.textContent = '3-20 chars: a-z, 0-9, underscore.'; return; }
+    var dnv = dn.value.trim();
+    if (!dnv) { imsg.textContent = 'A display name is required. It is what friends see.'; return; }
+    var r = await sb.from('profiles').update({ username: u, display_name: dnv })
       .eq('id', session.user.id);
     if (r.error) imsg.textContent = r.error.code === '23505' ? 'That username is taken.' : ('Failed: ' + r.error.message);
     else { imsg.textContent = 'Saved.'; await loadMyProfile(); renderNav(); }
@@ -1451,9 +1484,69 @@ function renderJoin(code) {
 
 /* ================= router ================= */
 
+function renderClaim() {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  wrap.appendChild(el('div', 'eyebrow', 'One thing first'));
+  wrap.appendChild(el('h1', null, 'Claim your name'));
+  var card = el('div', 'card');
+  card.appendChild(el('div', 'hint',
+    'Your username is your public address: it is how friends find you and where '
+    + 'your ledger lives. Your display name is what people read in the feed. '
+    + 'Nothing else opens until both are set.'));
+  var un = el('input'); un.type = 'text'; un.placeholder = 'username (a-z, 0-9, underscore)';
+  un.setAttribute('autocapitalize', 'none');
+  un.setAttribute('autocomplete', 'username');
+  un.maxLength = 20;
+  card.appendChild(un);
+  var dn = el('input'); dn.type = 'text'; dn.placeholder = 'Display name';
+  dn.setAttribute('autocomplete', 'name');
+  dn.maxLength = 40; dn.style.marginTop = '8px';
+  dn.value = (myProfile && myProfile.display_name) || '';
+  card.appendChild(dn);
+  var save = el('button', 'btn', 'Claim it'); save.type = 'button';
+  save.style.marginTop = '10px';
+  card.appendChild(save);
+  var msg = el('div', 'ok', ''); msg.style.marginTop = '10px';
+  card.appendChild(msg);
+  save.addEventListener('click', async function () {
+    var u = un.value.trim().toLowerCase();
+    var d = dn.value.trim();
+    if (!/^[a-z0-9_]{3,20}$/.test(u)) {
+      msg.textContent = 'Username: 3-20 characters, a-z, 0-9, underscore.'; return;
+    }
+    if (!d) { msg.textContent = 'Pick a display name. It is what friends see.'; return; }
+    save.disabled = true;
+    msg.textContent = 'Claiming...';
+    var r = await sb.from('profiles').update({ username: u, display_name: d })
+      .eq('id', session.user.id);
+    save.disabled = false;
+    if (r.error) {
+      msg.textContent = r.error.code === '23505'
+        ? '"' + u + '" is taken. Pick another.'
+        : 'Failed: ' + r.error.message;
+      return;
+    }
+    await loadMyProfile();
+    chip('Welcome, @' + u);
+    location.hash = '#/track';
+    route();
+  });
+  wrap.appendChild(card);
+  var out = el('div', 'card');
+  var so = el('button', 'btn ghost', 'Sign out'); so.type = 'button';
+  so.addEventListener('click', async function () { await sb.auth.signOut(); location.hash = '#/'; });
+  out.appendChild(so);
+  wrap.appendChild(out);
+  root.appendChild(wrap);
+}
+
 function route() {
   var h = location.hash || '#/';
   renderNav();
+  /* Password recovery has to get through; everything else waits for a name. */
+  if (h === '#/recover') { renderRecover(); return; }
+  if (needsClaim()) { renderClaim(); return; }
   if (h.indexOf('#/u/') === 0) { renderProfile(h.slice(4)); return; }
   if (h.indexOf('#/join/') === 0) { renderJoin(h.slice(7)); return; }
   if (h === '#/new') { renderWizard(); return; }
@@ -1462,7 +1555,6 @@ function route() {
   if (h === '#/people') { renderPeople(); return; }
   if (h === '#/settings') { renderSettings(); return; }
   if (h === '#/auth') { renderAuth(); return; }
-  if (h === '#/recover') { renderRecover(); return; }
   if (h === '#/paarth') { renderPaarthTemplate(); return; }
   renderLanding();
 }
