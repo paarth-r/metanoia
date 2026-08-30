@@ -124,6 +124,18 @@ function ago(ts) {
 }
 function esc(s) { return String(s == null ? '' : s); }
 
+/* A person's name, linked to their ledger only when they actually have a
+   username. Linking a null one produced '#/u/' -> "No such account". */
+function personLink(p) {
+  var name = (p && (p.display_name || p.username)) || 'unnamed';
+  if (p && p.username) {
+    var a = el('a', 'tl2', name);
+    a.href = '#/u/' + encodeURIComponent(p.username);
+    return a;
+  }
+  return el('span', 'tl2', name);
+}
+
 /* ================= supabase ================= */
 
 var CFG = window.METANOIA_CONFIG || {};
@@ -976,51 +988,77 @@ async function importLocal() {
 
 /* ---------- feed ---------- */
 
-async function renderFeed() {
-  var root = clear();
-  var wrap = el('div', 'wrap');
-  wrap.appendChild(el('div', 'eyebrow', 'The accountability feed'));
-  wrap.appendChild(el('h1', null, 'Feed'));
-  if (!signedIn()) {
-    var c0 = el('div', 'card');
-    c0.appendChild(el('div', 'hint', 'Sign in to see your friends and groups tick their days.'));
-    wrap.appendChild(c0); root.appendChild(wrap); return;
-  }
-  var card = el('div', 'card');
-  card.appendChild(el('div', 'hint', 'Loading...'));
-  wrap.appendChild(card);
-  root.appendChild(wrap);
+var MUTED_KEY = 'metanoia_muted_groups_v1';
+var REACTION_KINDS = [['respect', 'Respect'], ['locked_in', 'Locked in'], ['soft', 'Soft']];
+var feedFilter = { kind: 'all' };
+var groupSection = 'feed';
+var liveChannel = null;   /* per-page realtime subscription, torn down on navigation */
 
-  var events = await fetchFeed();
-  feedUnseen = 0;
-  lsSet(SEEN_KEY, new Date().toISOString());
-  renderNav();
+function mutedGroups() { return lsGet(MUTED_KEY) || []; }
+function setMutedGroups(ids) { lsSet(MUTED_KEY, ids); }
 
-  card.textContent = '';
-  if (!events.length) {
-    card.appendChild(el('div', 'hint',
-      'Quiet in here. Add friends or join a group under People, and their ticks show up as they happen.'));
+function dropLiveChannel() {
+  if (liveChannel) { sb.removeChannel(liveChannel); liveChannel = null; }
+}
+
+/* Null means the reactions table is not there yet: callers hide the row
+   rather than showing every event as having zero of everything. */
+async function loadReactions(events) {
+  var ids = events.map(function (e) { return e.id; });
+  if (!ids.length) return {};
+  var rr = await sb.from('feed_reactions').select('*').in('event_id', ids);
+  if (rr.error) return null;
+  var map = {};
+  (rr.data || []).forEach(function (r) {
+    if (!map[r.event_id]) map[r.event_id] = { counts: {}, mine: null };
+    map[r.event_id].counts[r.kind] = (map[r.event_id].counts[r.kind] || 0) + 1;
+    if (r.user_id === session.user.id) map[r.event_id].mine = r.kind;
+  });
+  return map;
+}
+
+function feedVerb(ev) {
+  var pname = (ev.plans && ev.plans.name) || (ev.payload && ev.payload.plan_name) || 'a reset';
+  if (ev.kind === 'started') return ' started "' + pname + '". Watch them.';
+  if (ev.kind === 'perfect') return ' went perfect on day ' + ev.day + ' of "' + pname + '".';
+  if (ev.kind === 'finished') return ' finished the thirty days of "' + pname + '".';
+  if (ev.kind === 'streak') return ' is on a ' + esc(ev.payload && ev.payload.streak) + '-day streak.';
+  return ' ticked ' + esc(ev.payload && ev.payload.score) + '/' + esc(ev.payload && ev.payload.total)
+    + ' on day ' + ev.day + ' of "' + pname + '".';
+}
+
+/* Paints events into host. opts: {userFilter: [ids], hideUsers: {id:true},
+   emptyText}. Repaints itself after a reaction so counts stay honest. */
+async function paintFeed(host, events, opts) {
+  opts = opts || {};
+  var list = events.filter(function (ev) {
+    if (opts.userFilter && opts.userFilter.indexOf(ev.user_id) < 0) return false;
+    if (opts.hideUsers && opts.hideUsers[ev.user_id]) return false;
+    return true;
+  });
+  var rx = await loadReactions(list);
+  host.textContent = '';
+  if (!list.length) {
+    host.appendChild(el('div', 'hint', opts.emptyText
+      || 'Quiet in here. Add friends or join a group under Social, and their ticks show up as they happen.'));
     return;
   }
-  events.forEach(function (ev) {
+  list.forEach(function (ev) {
     var prof = ev.profiles || {};
     var uname = prof.username || 'someone';
-    var pname = (ev.plans && ev.plans.name) || (ev.payload && ev.payload.plan_name) || 'a reset';
     var item = el('div', 'feeditem' + (ev.kind === 'perfect' ? ' perfect' : ''));
     item.appendChild(el('div', 'avatar', (uname[0] || '?')));
     var body = el('div', 'fbody');
     var line = el('div', 'fline');
-    var a = el('a', null, prof.display_name || uname);
-    a.href = '#/u/' + encodeURIComponent(uname);
-    line.appendChild(a);
-    var verb;
-    if (ev.kind === 'started') verb = ' started "' + pname + '". Watch them.';
-    else if (ev.kind === 'perfect') verb = ' went perfect on day ' + ev.day + ' of "' + pname + '".';
-    else if (ev.kind === 'finished') verb = ' finished the thirty days of "' + pname + '".';
-    else if (ev.kind === 'streak') verb = ' is on a ' + esc(ev.payload && ev.payload.streak) + '-day streak.';
-    else verb = ' ticked ' + esc(ev.payload && ev.payload.score) + '/' + esc(ev.payload && ev.payload.total) +
-      ' on day ' + ev.day + ' of "' + pname + '".';
-    line.appendChild(document.createTextNode(verb));
+    /* Only link a real username; '#/u/someone' is a dead end. */
+    if (prof.username) {
+      var a = el('a', null, prof.display_name || prof.username);
+      a.href = '#/u/' + encodeURIComponent(prof.username);
+      line.appendChild(a);
+    } else {
+      line.appendChild(el('b', null, prof.display_name || 'someone'));
+    }
+    line.appendChild(document.createTextNode(feedVerb(ev)));
     body.appendChild(line);
     body.appendChild(el('div', 'fmeta', ago(ev.created_at)));
     if ((ev.kind === 'tick' || ev.kind === 'perfect') && ev.payload && ev.payload.total) {
@@ -1030,12 +1068,137 @@ async function renderFeed() {
       bar.appendChild(fill);
       body.appendChild(bar);
     }
+    if (rx) {
+      var rrow = el('div', 'rxrow');
+      REACTION_KINDS.forEach(function (k) {
+        var mine = rx[ev.id] && rx[ev.id].mine === k[0];
+        var count = (rx[ev.id] && rx[ev.id].counts[k[0]]) || 0;
+        var b = el('button', 'rx' + (mine ? ' on' : '') + (k[0] === 'soft' ? ' soft' : ''));
+        b.type = 'button';
+        b.appendChild(el('span', null, k[1]));
+        if (count > 0) b.appendChild(el('b', null, String(count)));
+        b.addEventListener('click', async function () {
+          b.disabled = true;
+          if (mine) {
+            await sb.from('feed_reactions').delete()
+              .eq('event_id', ev.id).eq('user_id', session.user.id);
+          } else {
+            await sb.from('feed_reactions').upsert(
+              { event_id: ev.id, user_id: session.user.id, kind: k[0] },
+              { onConflict: 'event_id,user_id' });
+          }
+          paintFeed(host, events, opts);
+        });
+        rrow.appendChild(b);
+      });
+      body.appendChild(rrow);
+    }
     item.appendChild(body);
-    card.appendChild(item);
+    host.appendChild(item);
   });
 }
 
-/* ---------- people (friends + groups) ---------- */
+function pillRow(chips) {
+  var row = el('div', 'pills');
+  chips.forEach(function (ch) {
+    var b = el('button', 'pill' + (ch.active ? ' on' : ''), ch.label);
+    b.type = 'button';
+    b.addEventListener('click', ch.onClick);
+    row.appendChild(b);
+  });
+  return row;
+}
+
+async function renderFeed() {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  wrap.appendChild(el('div', 'eyebrow', 'The accountability wire'));
+  wrap.appendChild(el('h1', null, 'Feed'));
+  if (!signedIn()) {
+    var c0 = el('div', 'card');
+    c0.appendChild(el('div', 'hint', 'Sign in to see your friends and groups tick their days.'));
+    wrap.appendChild(c0); root.appendChild(wrap); return;
+  }
+  var pillHost = el('div');
+  wrap.appendChild(pillHost);
+  var card = el('div', 'card');
+  card.appendChild(el('div', 'hint', 'Loading...'));
+  wrap.appendChild(card);
+  root.appendChild(wrap);
+
+  var res = await Promise.all([
+    fetchFeed(),
+    sb.from('groups').select('id, name, group_members(user_id)'),
+    sb.from('friendships').select('*').eq('status', 'accepted')
+  ]);
+  var events = res[0];
+  var groups = res[1].data || [];
+  var friendIds = (res[2].data || []).map(function (r) {
+    return r.user_a === session.user.id ? r.user_b : r.user_a;
+  });
+
+  feedUnseen = 0;
+  lsSet(SEEN_KEY, new Date().toISOString());
+  renderNav();
+
+  function repaint() {
+    var muted = mutedGroups();
+    var opts = {};
+    if (feedFilter.kind === 'friends') {
+      opts.userFilter = friendIds.concat([session.user.id]);
+      opts.emptyText = 'Nothing from your friends yet.';
+    } else if (feedFilter.kind === 'group') {
+      var g = groups.filter(function (x) { return x.id === feedFilter.id; })[0];
+      opts.userFilter = g ? (g.group_members || []).map(function (m) { return m.user_id; }) : [];
+      opts.emptyText = 'Nothing from this group yet.';
+    } else {
+      /* Silencing hides a group's members from the main feed, unless they
+         reach you another way: a friend, or another group you did not silence. */
+      var hide = {};
+      groups.forEach(function (g2) {
+        if (muted.indexOf(g2.id) < 0) return;
+        (g2.group_members || []).forEach(function (m) { hide[m.user_id] = true; });
+      });
+      groups.forEach(function (g2) {
+        if (muted.indexOf(g2.id) >= 0) return;
+        (g2.group_members || []).forEach(function (m) { delete hide[m.user_id]; });
+      });
+      friendIds.forEach(function (id) { delete hide[id]; });
+      delete hide[session.user.id];
+      opts.hideUsers = hide;
+    }
+
+    pillHost.textContent = '';
+    var chips = [
+      { label: 'All', active: feedFilter.kind === 'all',
+        onClick: function () { feedFilter = { kind: 'all' }; repaint(); } },
+      { label: 'Friends', active: feedFilter.kind === 'friends',
+        onClick: function () { feedFilter = { kind: 'friends' }; repaint(); } }
+    ];
+    groups.forEach(function (g3) {
+      chips.push({
+        label: muted.indexOf(g3.id) >= 0 ? g3.name + ' (silenced)' : g3.name,
+        active: feedFilter.kind === 'group' && feedFilter.id === g3.id,
+        onClick: function () { feedFilter = { kind: 'group', id: g3.id }; repaint(); }
+      });
+    });
+    pillHost.appendChild(pillRow(chips));
+    paintFeed(card, events, opts);
+  }
+  repaint();
+}
+
+/* ---------- social: groups first, friends behind a door ---------- */
+
+function groupAvatar(g, cls) {
+  if (g.image_url) {
+    var img = el('img', 'gav' + (cls ? ' ' + cls : ''));
+    img.src = g.image_url;
+    img.alt = '';
+    return img;
+  }
+  return el('div', 'gav' + (cls ? ' ' + cls : ''), (g.name || '?')[0]);
+}
 
 async function renderPeople() {
   var root = clear();
@@ -1049,7 +1212,85 @@ async function renderPeople() {
   }
   root.appendChild(wrap);
 
-  /* find people */
+  var gc = el('div', 'card');
+  gc.appendChild(el('h2', null, 'Your groups'));
+  var glist = el('div');
+  gc.appendChild(glist);
+
+  var mkRow = el('div', 'addrow'); mkRow.style.marginTop = '14px';
+  var gn = el('input'); gn.type = 'text'; gn.placeholder = 'New group name'; gn.maxLength = 40;
+  var mk = el('button', 'btn', 'Create'); mk.type = 'button';
+  mk.addEventListener('click', async function () {
+    var v = gn.value.trim(); if (!v) return;
+    var r = await sb.rpc('create_group', { gname: v });
+    if (r.error) chip('Could not create: ' + r.error.message);
+    gn.value = ''; loadGroups();
+  });
+  mkRow.appendChild(gn); mkRow.appendChild(mk);
+  gc.appendChild(mkRow);
+
+  var jnRow = el('div', 'addrow');
+  var jc = el('input'); jc.type = 'text'; jc.placeholder = 'Invite code';
+  jc.setAttribute('autocapitalize', 'none');
+  var jn = el('button', 'btn ghost', 'Join'); jn.type = 'button';
+  jn.addEventListener('click', async function () {
+    var v = jc.value.trim(); if (!v) return;
+    var r = await sb.rpc('join_group', { code: v });
+    if (r.error) chip('Could not join: ' + r.error.message);
+    else chip('Joined');
+    jc.value = ''; loadGroups();
+  });
+  jnRow.appendChild(jc); jnRow.appendChild(jn);
+  gc.appendChild(jnRow);
+  wrap.appendChild(gc);
+
+  var fdoor = el('div', 'card');
+  var fb = el('a', 'btn', 'Friends'); fb.href = '#/friends';
+  fdoor.appendChild(fb);
+  fdoor.appendChild(el('div', 'hint', 'Requests, your friends list, and adding people by username.'));
+  wrap.appendChild(fdoor);
+
+  async function loadGroups() {
+    glist.textContent = '';
+    var gr = await sb.from('groups')
+      .select('*, group_members(user_id, profiles(username, display_name))');
+    var groups = gr.data || [];
+    if (!groups.length) {
+      glist.appendChild(el('div', 'hint',
+        'No groups yet. Create one and share the invite code: the group sees each '
+        + "other's ledgers and feed, and gets a private chat."));
+      return;
+    }
+    groups.forEach(function (g) {
+      var a = el('a', 'grow');
+      a.href = '#/g/' + g.id;
+      a.appendChild(groupAvatar(g));
+      var mid = el('div', 'gmid');
+      mid.appendChild(el('div', 'gname', g.name));
+      var n = (g.group_members || []).length;
+      mid.appendChild(el('div', 'count', n + ' member' + (n === 1 ? '' : 's')));
+      a.appendChild(mid);
+      a.appendChild(el('span', 'chev', '>'));
+      glist.appendChild(a);
+    });
+  }
+  loadGroups();
+}
+
+async function renderFriends() {
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  var back = el('a', 'backlink', '< Social'); back.href = '#/people';
+  wrap.appendChild(back);
+  wrap.appendChild(el('div', 'eyebrow', 'Witnesses to the thirty days'));
+  wrap.appendChild(el('h1', null, 'Friends'));
+  if (!signedIn()) {
+    var c0 = el('div', 'card');
+    c0.appendChild(el('div', 'hint', 'Sign in to add friends.'));
+    wrap.appendChild(c0); root.appendChild(wrap); return;
+  }
+  root.appendChild(wrap);
+
   var find = el('div', 'card');
   find.appendChild(el('h2', null, 'Add a friend'));
   var ar = el('div', 'addrow');
@@ -1073,7 +1314,7 @@ async function renderPeople() {
     });
     fmsg.textContent = r.error
       ? (r.error.code === '23505' ? 'Request already exists.' : 'Failed: ' + r.error.message)
-      : 'Requested. They accept from their People page.';
+      : 'Requested. They accept from their Friends page.';
     un.value = '';
     loadLists();
   });
@@ -1101,9 +1342,7 @@ async function renderPeople() {
       ic.appendChild(el('h2', null, 'Requests for you'));
       incoming.forEach(function (f) {
         var rowE = el('div', 'trow');
-        var a = el('a', 'tl2', f.other.display_name || f.other.username || 'unnamed');
-        a.href = '#/u/' + encodeURIComponent(f.other.username || '');
-        rowE.appendChild(a);
+        rowE.appendChild(personLink(f.other));
         var acc = el('button', 'btn small', 'Accept'); acc.type = 'button';
         acc.addEventListener('click', async function () {
           await sb.from('friendships').update({ status: 'accepted' })
@@ -1127,9 +1366,7 @@ async function renderPeople() {
     if (!friends.length) fc.appendChild(el('div', 'hint', 'No friends yet. Accountability needs witnesses.'));
     friends.forEach(function (f) {
       var rowE = el('div', 'trow');
-      var a = el('a', 'tl2', f.other.display_name || f.other.username || 'unnamed');
-      a.href = '#/u/' + encodeURIComponent(f.other.username || '');
-      rowE.appendChild(a);
+      rowE.appendChild(personLink(f.other));
       var rm = el('button', 'xb', 'remove'); rm.type = 'button';
       rm.addEventListener('click', async function () {
         if (!confirm('Remove this friend?')) return;
@@ -1146,59 +1383,266 @@ async function renderPeople() {
       fc.appendChild(rowE);
     });
     lists.appendChild(fc);
-
-    /* groups */
-    var gc = el('div', 'card');
-    gc.appendChild(el('h2', null, 'Groups'));
-    gc.appendChild(el('div', 'hint',
-      'Everyone in a group sees each other\'s friends-tier ledgers and feed events. Private plans stay private, even here.'));
-    var gr = await sb.from('groups').select('*, group_members(user_id, profiles(username, display_name))');
-    (gr.data || []).forEach(function (g) {
-      var rowE = el('div', 'trow');
-      var span = el('span', 'tl2');
-      span.appendChild(document.createTextNode(g.name + '  '));
-      var mem = (g.group_members || []).map(function (m) {
-        return (m.profiles && (m.profiles.username || m.profiles.display_name)) || '?';
-      });
-      span.appendChild(el('span', 'count', mem.join(', ')));
-      rowE.appendChild(span);
-      rowE.appendChild(el('span', 'count', 'code ' + g.invite_code));
-      var lv = el('button', 'xb', 'leave'); lv.type = 'button';
-      lv.addEventListener('click', async function () {
-        await sb.from('group_members').delete()
-          .eq('group_id', g.id).eq('user_id', session.user.id);
-        loadLists();
-      });
-      rowE.appendChild(lv);
-      gc.appendChild(rowE);
-    });
-    var mkRow = el('div', 'addrow'); mkRow.style.marginTop = '12px';
-    var gn = el('input'); gn.type = 'text'; gn.placeholder = 'New group name'; gn.maxLength = 40;
-    var mk = el('button', 'btn ghost', 'Create'); mk.type = 'button';
-    mk.addEventListener('click', async function () {
-      var v = gn.value.trim(); if (!v) return;
-      var r2 = await sb.rpc('create_group', { gname: v });
-      if (r2.error) chip('Could not create: ' + r2.error.message);
-      gn.value = ''; loadLists();
-    });
-    mkRow.appendChild(gn); mkRow.appendChild(mk);
-    gc.appendChild(mkRow);
-    var jnRow = el('div', 'addrow');
-    var jc = el('input'); jc.type = 'text'; jc.placeholder = 'Invite code';
-    jc.setAttribute('autocapitalize', 'none');
-    var jn = el('button', 'btn ghost', 'Join'); jn.type = 'button';
-    jn.addEventListener('click', async function () {
-      var v = jc.value.trim(); if (!v) return;
-      var r2 = await sb.rpc('join_group', { code: v });
-      if (r2.error) chip('Could not join: ' + r2.error.message);
-      else chip('Joined');
-      jc.value = ''; loadLists();
-    });
-    jnRow.appendChild(jc); jnRow.appendChild(jn);
-    gc.appendChild(jnRow);
-    lists.insertBefore(gc, lists.firstChild);
   }
   loadLists();
+}
+
+/* ---------- one group: feed, chat, members, settings ---------- */
+
+async function renderGroup(gid) {
+  /* Section switches re-enter this function directly, not through route(),
+     so drop any chat subscription here too or they stack up. */
+  dropLiveChannel();
+  var root = clear();
+  var wrap = el('div', 'wrap');
+  var back = el('a', 'backlink', '< Social'); back.href = '#/people';
+  wrap.appendChild(back);
+  root.appendChild(wrap);
+  if (!signedIn()) {
+    wrap.appendChild(el('h1', null, 'Sign in first'));
+    return;
+  }
+  gid = decodeURIComponent(gid);
+  var gr = await sb.from('groups')
+    .select('*, group_members(user_id, profiles(username, display_name))')
+    .eq('id', gid).maybeSingle();
+  if (!gr.data) {
+    wrap.appendChild(el('h1', null, 'No such group'));
+    wrap.appendChild(el('div', 'hint', 'You are not a member of this group, or it no longer exists.'));
+    return;
+  }
+  var g = gr.data;
+  var members = g.group_members || [];
+
+  var head = el('div', 'ghead');
+  head.appendChild(groupAvatar(g, 'big'));
+  var hmid = el('div', 'gmid');
+  hmid.appendChild(el('h1', 'gtitle', g.name));
+  hmid.appendChild(el('div', 'count',
+    members.length + ' member' + (members.length === 1 ? '' : 's')));
+  head.appendChild(hmid);
+  wrap.appendChild(head);
+
+  var tabs = el('div', 'seg');
+  var body = el('div');
+  [['feed', 'Feed'], ['chat', 'Chat'], ['members', 'Members'], ['settings', 'Settings']]
+    .forEach(function (t) {
+      var b = el('button', 'segb' + (groupSection === t[0] ? ' on' : ''), t[1]);
+      b.type = 'button';
+      b.addEventListener('click', function () {
+        groupSection = t[0];
+        renderGroup(gid);
+      });
+      tabs.appendChild(b);
+    });
+  wrap.appendChild(tabs);
+  wrap.appendChild(body);
+
+  if (groupSection === 'feed') {
+    var fcard = el('div', 'card');
+    fcard.appendChild(el('div', 'hint', 'Loading...'));
+    body.appendChild(fcard);
+    var events = await fetchFeed();
+    paintFeed(fcard, events, {
+      userFilter: members.map(function (m) { return m.user_id; }),
+      emptyText: 'Nothing from this group yet. Ticks, perfect days, and new resets from members land here.'
+    });
+  }
+
+  if (groupSection === 'chat') {
+    var ccard = el('div', 'card');
+    var log = el('div', 'chatlog');
+    ccard.appendChild(log);
+    var crow = el('div', 'addrow');
+    var ci = el('input'); ci.type = 'text'; ci.placeholder = 'Write to the group'; ci.maxLength = 2000;
+    var cs = el('button', 'btn', 'Send'); cs.type = 'button';
+    crow.appendChild(ci); crow.appendChild(cs);
+    ccard.appendChild(crow);
+    body.appendChild(ccard);
+
+    var loadMsgs = async function () {
+      var r = await sb.from('group_messages')
+        .select('*, profiles(username, display_name)')
+        .eq('group_id', g.id)
+        .order('created_at', { ascending: false }).limit(100);
+      log.textContent = '';
+      if (r.error) {
+        log.appendChild(el('div', 'hint', 'Chat is being set up on the backend. Check back shortly.'));
+        return;
+      }
+      var msgs = (r.data || []).slice().reverse();
+      if (!msgs.length) {
+        log.appendChild(el('div', 'hint', 'Quiet in here. Say something.'));
+        return;
+      }
+      msgs.forEach(function (m) {
+        var mine = m.user_id === session.user.id;
+        var b = el('div', 'msg' + (mine ? ' mine' : ''));
+        if (!mine) {
+          b.appendChild(el('div', 'mwho',
+            (m.profiles && (m.profiles.display_name || m.profiles.username)) || 'unnamed'));
+        }
+        b.appendChild(el('div', 'mbody', m.body));
+        b.appendChild(el('div', 'mwhen', ago(m.created_at)));
+        log.appendChild(b);
+      });
+      log.scrollTop = log.scrollHeight;
+    };
+
+    var send = async function () {
+      var v = ci.value.trim(); if (!v) return;
+      ci.value = '';
+      var r = await sb.from('group_messages').insert({
+        group_id: g.id, user_id: session.user.id, body: v
+      });
+      if (r.error) chip('Could not send.');
+      loadMsgs();
+    };
+    cs.addEventListener('click', send);
+    ci.addEventListener('keydown', function (e) { if (e.key === 'Enter') send(); });
+    loadMsgs();
+
+    liveChannel = sb.channel('chat-' + g.id)
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'group_messages', filter: 'group_id=eq.' + g.id },
+        function () { loadMsgs(); })
+      .subscribe();
+  }
+
+  if (groupSection === 'members') {
+    var inv = el('div', 'card');
+    inv.appendChild(el('h2', null, 'Invite'));
+    var invRow = el('div', 'btnrow');
+    var addB = el('button', 'btn ghost', 'Add a friend'); addB.type = 'button';
+    var shareB = el('button', 'btn ghost', 'Copy invite link'); shareB.type = 'button';
+    shareB.addEventListener('click', async function () {
+      var link = location.origin + location.pathname + '#/join/' + g.invite_code;
+      try {
+        await navigator.clipboard.writeText(
+          'Join "' + g.name + '" on Metanoia. Invite code: ' + g.invite_code + '  ' + link);
+        chip('Invite link copied');
+      } catch (e) { chip(link); }
+    });
+    invRow.appendChild(addB); invRow.appendChild(shareB);
+    inv.appendChild(invRow);
+    var opts = el('div');
+    inv.appendChild(opts);
+    addB.addEventListener('click', async function () {
+      if (opts.textContent) { opts.textContent = ''; return; }
+      opts.appendChild(el('div', 'hint', 'Loading...'));
+      var r = await sb.from('friendships').select(
+        '*, a:profiles!friendships_user_a_fkey(id, username, display_name), b:profiles!friendships_user_b_fkey(id, username, display_name)')
+        .eq('status', 'accepted');
+      var cand = (r.data || []).map(function (row) {
+        return row.a && row.a.id === session.user.id ? row.b : row.a;
+      }).filter(function (p) {
+        return p && !members.some(function (m) { return m.user_id === p.id; });
+      });
+      opts.textContent = '';
+      if (!cand.length) {
+        opts.appendChild(el('div', 'hint',
+          'All of your friends are already here, or you have none yet. Share the code instead.'));
+        return;
+      }
+      cand.forEach(function (p) {
+        var rowE = el('div', 'trow');
+        rowE.appendChild(el('span', 'tl2', p.display_name || p.username));
+        var ab = el('button', 'btn small', 'Add'); ab.type = 'button';
+        ab.addEventListener('click', async function () {
+          var rr = await sb.rpc('add_friend_to_group', { gid: g.id, fid: p.id });
+          if (rr.error) chip('Could not add them.');
+          else { chip('Added to the group.'); renderGroup(gid); }
+        });
+        rowE.appendChild(ab);
+        opts.appendChild(rowE);
+      });
+    });
+    body.appendChild(inv);
+
+    var mc = el('div', 'card');
+    members.forEach(function (m) {
+      var rowE = el('div', 'trow');
+      rowE.appendChild(personLink(m.profiles));
+      mc.appendChild(rowE);
+    });
+    mc.appendChild(el('div', 'hint',
+      "Click a member to see their ledger. Group-mates see each other's friends-tier plans; private stays private."));
+    body.appendChild(mc);
+  }
+
+  if (groupSection === 'settings') {
+    var ic2 = el('div', 'card');
+    ic2.appendChild(el('h2', null, 'Group image'));
+    var imgRow = el('div', 'ghead');
+    imgRow.appendChild(groupAvatar(g, 'big'));
+    var fileIn = el('input'); fileIn.type = 'file'; fileIn.accept = 'image/*';
+    fileIn.style.display = 'none';
+    var pick = el('button', 'btn ghost', 'Change image'); pick.type = 'button';
+    pick.addEventListener('click', function () { fileIn.click(); });
+    fileIn.addEventListener('change', async function () {
+      var f = fileIn.files && fileIn.files[0];
+      if (!f) return;
+      chip('Uploading...');
+      /* Fixed .jpg path so the app and the site overwrite the same object;
+         the storage policy only reads the uuid before the first dot. */
+      var path = g.id + '.jpg';
+      var up = await sb.storage.from('group-images')
+        .upload(path, f, { contentType: f.type || 'image/jpeg', upsert: true });
+      if (up.error) { chip('Upload failed.'); return; }
+      var pub = sb.storage.from('group-images').getPublicUrl(path);
+      var url = pub.data.publicUrl + '?t=' + Date.now();
+      var r = await sb.from('groups').update({ image_url: url }).eq('id', g.id);
+      if (r.error) { chip('Could not save the image.'); return; }
+      chip('Group image updated.');
+      renderGroup(gid);
+    });
+    imgRow.appendChild(pick);
+    imgRow.appendChild(fileIn);
+    ic2.appendChild(imgRow);
+    body.appendChild(ic2);
+
+    var cc = el('div', 'card');
+    cc.appendChild(el('h2', null, 'Invite code'));
+    var code = el('div', 'invcode', g.invite_code);
+    code.addEventListener('click', async function () {
+      try { await navigator.clipboard.writeText(g.invite_code); chip('Invite code copied'); }
+      catch (e) {}
+    });
+    cc.appendChild(code);
+    cc.appendChild(el('div', 'hint',
+      'Click to copy. Anyone with this code can join from the Social page.'));
+    body.appendChild(cc);
+
+    var sc = el('div', 'card');
+    sc.appendChild(el('h2', null, 'This group in your main feed'));
+    sc.appendChild(el('div', 'hint',
+      'Silencing removes these members from your main feed unless they are your friends '
+      + "or share another group with you. The group's own Feed tab stays."));
+    var isMuted = mutedGroups().indexOf(g.id) >= 0;
+    var mb = el('button', 'btn ghost', isMuted ? 'Allow in main feed' : 'Silence in main feed');
+    mb.type = 'button';
+    mb.addEventListener('click', function () {
+      var ids = mutedGroups();
+      setMutedGroups(isMuted
+        ? ids.filter(function (i) { return i !== g.id; })
+        : ids.concat([g.id]));
+      chip(isMuted ? 'This group speaks in your main feed again.' : 'Group silenced in your main feed.');
+      renderGroup(gid);
+    });
+    sc.appendChild(mb);
+    body.appendChild(sc);
+
+    var lc = el('div', 'card');
+    var lb = el('button', 'btn ghost', 'Leave group'); lb.type = 'button';
+    lb.addEventListener('click', async function () {
+      if (!confirm('Leave ' + g.name + '?')) return;
+      await sb.from('group_members').delete()
+        .eq('group_id', g.id).eq('user_id', session.user.id);
+      location.hash = '#/people';
+    });
+    lc.appendChild(lb);
+    body.appendChild(lc);
+  }
 }
 
 /* ---------- public profile ---------- */
@@ -1256,10 +1700,12 @@ async function renderProfile(username) {
   for (var i = 0; i < rows.length; i++) {
     var planRow = rows[i];
     var days = {}, weeks = {};
-    var dr = await sb.from('plan_days').select('*').eq('plan_id', planRow.id);
-    (dr.data || []).forEach(function (r) { days[r.day] = r.checks; });
-    var wr = await sb.from('plan_weeks').select('*').eq('plan_id', planRow.id);
-    (wr.data || []).forEach(function (r) { weeks[r.week] = r.checks; });
+    var both = await Promise.all([
+      sb.from('plan_days').select('*').eq('plan_id', planRow.id),
+      sb.from('plan_weeks').select('*').eq('plan_id', planRow.id)
+    ]);
+    (both[0].data || []).forEach(function (r) { days[r.day] = r.checks; });
+    (both[1].data || []).forEach(function (r) { weeks[r.week] = r.checks; });
     var pobj = planRowToObj(planRow);
     var head = el('h1', null, pobj.name);
     head.style.fontSize = '30px'; head.style.marginTop = '18px';
@@ -1476,7 +1922,8 @@ function renderJoin(code) {
       card.appendChild(el('div', 'err', 'Could not join: ' + r.error.message));
     } else {
       card.appendChild(el('div', 'hint', 'You are in. The group sees your friends-tier ledger, and you see theirs.'));
-      var b2 = el('a', 'btn', 'Open Social'); b2.href = '#/people';
+      var b2 = el('a', 'btn', 'Open the group');
+      b2.href = r.data ? '#/g/' + r.data : '#/people';
       card.appendChild(b2);
     }
   });
@@ -1543,16 +1990,19 @@ function renderClaim() {
 
 function route() {
   var h = location.hash || '#/';
+  dropLiveChannel();
   renderNav();
   /* Password recovery has to get through; everything else waits for a name. */
   if (h === '#/recover') { renderRecover(); return; }
   if (needsClaim()) { renderClaim(); return; }
   if (h.indexOf('#/u/') === 0) { renderProfile(h.slice(4)); return; }
   if (h.indexOf('#/join/') === 0) { renderJoin(h.slice(7)); return; }
+  if (h.indexOf('#/g/') === 0) { renderGroup(h.slice(4)); return; }
+  if (h === '#/friends') { renderFriends(); return; }
   if (h === '#/new') { renderWizard(); return; }
   if (h === '#/track') { renderTracker(); return; }
   if (h === '#/feed') { renderFeed(); return; }
-  if (h === '#/people') { renderPeople(); return; }
+  if (h === '#/people') { groupSection = 'feed'; renderPeople(); return; }
   if (h === '#/settings') { renderSettings(); return; }
   if (h === '#/auth') { renderAuth(); return; }
   if (h === '#/paarth') { renderPaarthTemplate(); return; }

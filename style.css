@@ -166,3 +166,67 @@ input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px soli
 .chip.show{opacity:1}
 @media (prefers-reduced-motion: reduce){.chip{transition:none}}
 @media (max-width:420px){h1{font-size:38px}.grid{grid-template-columns:repeat(5,1fr)}}
+
+/* ---------- social: pills, reactions, groups, chat ---------- */
+
+.backlink{display:inline-block;font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--muted);text-decoration:none;margin-bottom:10px}
+.backlink:hover{color:var(--ink)}
+
+/* feed filter pills */
+.pills{display:flex;flex-wrap:wrap;gap:7px;margin:16px 0 18px}
+.pill{font:inherit;font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  border:1.5px solid var(--line);background:none;color:var(--muted);
+  padding:6px 13px;border-radius:999px;cursor:pointer}
+.pill.on{background:var(--leather);color:var(--on-leather);border-color:var(--leather)}
+.pill:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+
+/* feed reactions */
+.rxrow{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.rx{display:inline-flex;align-items:center;gap:5px;font:inherit;font-size:10px;
+  letter-spacing:.08em;text-transform:uppercase;border:1.5px solid var(--line);
+  background:none;color:var(--muted);padding:4px 10px;border-radius:999px;cursor:pointer}
+.rx.soft{color:var(--danger)}
+.rx.on{background:var(--leather);color:var(--on-leather);border-color:var(--leather)}
+.rx b{font-weight:400;font-size:10px}
+.rx:disabled{opacity:.5}
+.rx:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+
+/* group rows and avatars */
+.gav{width:44px;height:44px;flex:none;border-radius:50%;border:1.5px solid var(--leather);
+  display:flex;align-items:center;justify-content:center;overflow:hidden;
+  font-family:"Cormorant Garamond",Georgia,serif;font-size:21px;text-transform:uppercase;
+  color:var(--ink);object-fit:cover}
+.gav.big{width:56px;height:56px;font-size:27px}
+.grow{display:flex;align-items:center;gap:12px;padding:12px 2px;text-decoration:none;
+  color:var(--ink);border-bottom:1px solid var(--line-soft)}
+.grow:last-of-type{border-bottom:none}
+.gmid{flex:1;min-width:0}
+.gname{font-family:"Cormorant Garamond",Georgia,serif;font-size:21px;line-height:1.2}
+.chev{font-family:"Cormorant Garamond",Georgia,serif;font-size:22px;color:var(--gold)}
+.ghead{display:flex;align-items:center;gap:14px;margin:16px 0 4px;flex-wrap:wrap}
+.ghead h1.gtitle{font-size:34px;margin:0}
+.ghead h1.gtitle::after{display:none}
+
+/* segmented control */
+.seg{display:flex;gap:4px;padding:5px;border:1px solid var(--line);border-radius:999px;
+  background:var(--card);margin:16px 0 20px}
+.segb{flex:1;font:inherit;font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+  background:none;border:none;color:var(--muted);padding:10px 4px;border-radius:999px;cursor:pointer}
+.segb.on{background:var(--leather);color:var(--on-leather)}
+.segb:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+
+/* group chat */
+.chatlog{max-height:52vh;overflow-y:auto;display:flex;flex-direction:column;
+  gap:10px;padding:2px 2px 12px}
+.msg{max-width:82%;align-self:flex-start}
+.msg.mine{align-self:flex-end;text-align:right}
+.mwho{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:3px}
+.mbody{display:inline-block;text-align:left;padding:9px 13px;border-radius:14px;
+  border:1px solid var(--line);background:var(--bg);font-size:13px;line-height:1.45;
+  white-space:pre-wrap;overflow-wrap:anywhere}
+.msg.mine .mbody{background:var(--leather);color:var(--on-leather);border-color:var(--leather)}
+.mwhen{font-size:9px;letter-spacing:.1em;color:var(--muted);margin-top:3px}
+
+.invcode{font-family:"Cormorant Garamond",Georgia,serif;font-size:32px;letter-spacing:.16em;
+  cursor:pointer;margin:2px 0 4px}
