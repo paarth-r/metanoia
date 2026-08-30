@@ -6,7 +6,7 @@ import {
   useColorScheme, ActivityIndicator, Alert, RefreshControl, SafeAreaView,
   StatusBar, Platform, Image, KeyboardAvoidingView,
 } from 'react-native';
-import { Share } from 'react-native';
+import { Share, Linking } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -1610,8 +1610,15 @@ function GroupScreen({ c, me, group, onOpenUser, say, onBack }) {
     const v = draft.trim(); if (!v) return;
     setDraft('');
     const r = await sb.from('group_messages').insert({ group_id: group.id, user_id: me, body: v });
-    if (r.error) say('Could not send.');
-    else loadMsgs();
+    if (r.error) {
+      /* The guard_message trigger refuses banned terms and suspended accounts;
+         say which it was rather than a generic failure. */
+      const m = String(r.error.message || '');
+      say(/community rules/i.test(m) ? 'That message breaks the community rules.'
+        : /suspended/i.test(m) ? 'Your account is suspended.'
+        : 'Could not send.');
+      setDraft(v);
+    } else loadMsgs();
   };
 
   const pickImage = async () => {
@@ -1731,13 +1738,26 @@ function GroupScreen({ c, me, group, onOpenUser, say, onBack }) {
                           {m.profiles?.display_name || m.profiles?.username || '?'}
                         </Text>
                       ) : null}
-                      <View style={{
-                        maxWidth: '82%', paddingVertical: 9, paddingHorizontal: 13, borderRadius: 14,
-                        backgroundColor: mine ? c.leather : c.card,
-                        borderWidth: mine ? 0 : 1, borderColor: c.line,
-                      }}>
+                      {/* Every piece of user content needs a reachable report
+                          path (App Store 1.2). Long-press is the platform
+                          convention for a message; the hint below says so, so
+                          it is discoverable to a reviewer and to users. */}
+                      <Pressable disabled={mine} onLongPress={() => Alert.alert(
+                        'This message',
+                        m.profiles?.username ? 'From @' + m.profiles.username : 'From this user',
+                        [{ text: 'Report message', style: 'destructive',
+                           onPress: () => promptReport({
+                             targetUser: m.user_id, kind: 'message', messageId: m.id, say }) },
+                         { text: 'Block this person', style: 'destructive',
+                           onPress: () => blockUser(m.user_id, say, loadMsgs) },
+                         { text: 'Cancel', style: 'cancel' }])}
+                        style={{
+                          maxWidth: '82%', paddingVertical: 9, paddingHorizontal: 13, borderRadius: 14,
+                          backgroundColor: mine ? c.leather : c.card,
+                          borderWidth: mine ? 0 : 1, borderColor: c.line,
+                        }}>
                         <Text style={{ fontFamily: MONO, fontSize: 13, lineHeight: 19, color: mine ? c.onLeather : c.ink }}>{m.body}</Text>
-                      </View>
+                      </Pressable>
                       <Text style={{ fontFamily: MONO, fontSize: 9, color: c.muted, marginTop: 2 }}>{ago(m.created_at)}</Text>
                     </View>
                   );
@@ -1750,6 +1770,9 @@ function GroupScreen({ c, me, group, onOpenUser, say, onBack }) {
                 onSubmitEditing={send} returnKeyType="send" />
               <Btn c={c} label="Send" onPress={send} style={{ borderRadius: 22 }} />
             </View>
+            <Text style={{ fontFamily: MONO, fontSize: 10, color: c.muted, marginTop: 6 }}>
+              Hold a message to report it or block whoever sent it.
+            </Text>
           </View>
         ) : null}
 
@@ -2002,6 +2025,18 @@ function ProfileScreen({ c, username, me, onBack, say }) {
           ) : null}
           {friendState === 'pending' ? <Hint c={c} style={{ marginTop: 8 }}>Friend request pending.</Hint> : null}
           {friendState === 'accepted' ? <Hint c={c} style={{ marginTop: 8 }}>Friends.</Hint> : null}
+          {prof.id !== me ? (
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+              <Btn c={c} small ghost label="Report" onPress={() => promptReport({
+                targetUser: prof.id, kind: 'profile', say })} />
+              <Btn c={c} small ghost label="Block" onPress={() => Alert.alert(
+                'Block @' + prof.username + '?',
+                'Neither of you will see the other\'s ledger, feed activity or group messages. You can undo this in Account.',
+                [{ text: 'Cancel', style: 'cancel' },
+                 { text: 'Block', style: 'destructive',
+                   onPress: () => blockUser(prof.id, say, onBack) }])} />
+            </View>
+          ) : null}
           {!plans.length ? (
             <Card c={c} style={{ marginTop: 16 }}>
               <Hint c={c} style={{ marginBottom: 0 }}>Nothing visible here. Their plans are private, or friends-only and you are not friends yet.</Hint>
@@ -2036,6 +2071,14 @@ function AccountScreen({ c, profile, SP, setSP, onProfileSaved, say }) {
   const [display, setDisplay] = useState(profile?.display_name || '');
   const [token, setToken] = useState('');
   const [newPw, setNewPw] = useState('');
+  const [blocked, setBlocked] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const r = await sb.from('blocks').select('blocked, profiles!blocks_blocked_fkey(username, display_name)');
+      setBlocked(r.error ? [] : (r.data || []));
+    })();
+  }, []);
   // profile loads async after sign-in; useState initializers only run on first
   // mount, so re-seed the fields whenever the profile actually arrives.
   useEffect(() => {
@@ -2118,8 +2161,69 @@ function AccountScreen({ c, profile, SP, setSP, onProfileSaved, say }) {
         ) : null}
       </Card>
 
+      {/* The block confirmation promises this exists, so it has to. */}
+      <Card c={c}>
+        <H2 c={c}>Blocked accounts</H2>
+        {blocked === null ? <ActivityIndicator color={c.ink} /> : null}
+        {blocked && !blocked.length ? (
+          <Hint c={c} style={{ marginBottom: 0 }}>You have not blocked anyone.</Hint>
+        ) : null}
+        {(blocked || []).map((b) => (
+          <View key={b.blocked} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10,
+            borderBottomWidth: 1, borderColor: c.lineSoft }}>
+            <Text style={{ fontFamily: MONO_M, fontSize: 14, color: c.ink, flex: 1 }}>
+              {b.profiles?.display_name || b.profiles?.username || 'unknown'}
+            </Text>
+            <Btn c={c} small ghost label="Unblock" onPress={async () => {
+              const r = await sb.from('blocks').delete()
+                .eq('blocker', profile.id).eq('blocked', b.blocked);
+              if (r.error) { say('Could not unblock.'); return; }
+              setBlocked((p) => p.filter((x) => x.blocked !== b.blocked));
+              say('Unblocked.');
+            }} />
+          </View>
+        ))}
+      </Card>
+
+      <Card c={c}>
+        <H2 c={c}>Legal</H2>
+        <Hint c={c}>The rules for what can be posted, and exactly what this app stores about you.</Hint>
+        <Btn c={c} label="Terms of use" ghost small onPress={() => Linking.openURL(SITE_URL + 'terms.html')} />
+        <Btn c={c} label="Privacy policy" ghost small style={{ marginTop: 8 }}
+          onPress={() => Linking.openURL(SITE_URL + 'privacy.html')} />
+        <Btn c={c} label="Contact support" ghost small style={{ marginTop: 8 }}
+          onPress={() => Linking.openURL('mailto:' + CONTACT_EMAIL + '?subject=Metanoia')} />
+      </Card>
+
       <Card c={c}>
         <Btn c={c} label="Sign out" ghost onPress={() => sb.auth.signOut()} />
+      </Card>
+
+      {/* App Store 5.1.1(v): deletion must be reachable in the app and must
+          actually delete, not deactivate. delete_me() removes the auth user
+          and every table cascades from it. */}
+      <Card c={c}>
+        <H2 c={c}>Delete account</H2>
+        <Hint c={c}>
+          This erases your account for good: your login, profile, plans, every day you ticked,
+          your todos, your group memberships and your messages. Immediate, permanent, no recovery.
+        </Hint>
+        <Btn c={c} label="Delete my account" ghost onPress={() => {
+          Alert.alert('Delete your account?',
+            'Everything goes: your ledger, your streak, your todos, your messages. This cannot be undone.',
+            [{ text: 'Cancel', style: 'cancel' },
+             { text: 'Continue', style: 'destructive', onPress: () => {
+               Alert.alert('Last chance',
+                 'There is no recovery and no grace period. Delete ' +
+                 (profile?.username ? '@' + profile.username : 'this account') + ' permanently?',
+                 [{ text: 'Keep my account', style: 'cancel' },
+                  { text: 'Delete permanently', style: 'destructive', onPress: async () => {
+                    const r = await sb.rpc('delete_me');
+                    if (r.error) { say('Could not delete the account. Email support.'); return; }
+                    await sb.auth.signOut();
+                  } }]);
+             } }]);
+        }} />
       </Card>
     </ScrollView>
   );
